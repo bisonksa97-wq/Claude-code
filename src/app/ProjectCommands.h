@@ -45,6 +45,23 @@ private:
     std::vector<MediaItem> items_;
 };
 
+// Replaces a media item's editable metadata (marks, rating, keywords...) with `updated`.
+class UpdateMediaCommand final : public Command {
+public:
+    UpdateMediaCommand(Project& project, MediaItem updated, std::string name)
+        : project_(project), updated_(std::move(updated)), name_(std::move(name)) {}
+
+    std::string name() const override { return name_; }
+    Status apply() override;
+    void revert() override;
+
+private:
+    Project& project_;
+    MediaItem updated_;
+    std::optional<MediaItem> before_;
+    std::string name_;
+};
+
 // Replaces a media item's file reference (relink / replace source).
 class RelinkMediaCommand final : public Command {
 public:

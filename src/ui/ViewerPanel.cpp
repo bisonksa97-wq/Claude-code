@@ -7,7 +7,10 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-#include "app/EditorSession.h"
+#include <QEvent>
+#include <QMouseEvent>
+
+#include "project/Project.h"
 #include "core/Timecode.h"
 #include "playback/PlaybackEngine.h"
 #include "render/FrameCompositor.h"
@@ -36,10 +39,16 @@ void FrameView::paintEvent(QPaintEvent*) {
 ViewerPanel::ViewerPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+    title_ = new QLabel(this);
+    layout->addWidget(title_);
     view_ = new FrameView(this);
     view_->setMinimumSize(320, 180);
     view_->setAccessibleName(tr("Timeline viewer"));
     layout->addWidget(view_, 1);
+    scrub_ = new ScrubBar(this);
+    scrub_->setAccessibleName(tr("Position"));
+    connect(scrub_, &ScrubBar::seekRequested, this, &ViewerPanel::setPosition);
+    layout->addWidget(scrub_);
 
     auto* bar = new QHBoxLayout;
     auto makeButton = [&](const QString& text, const QString& tip, auto slot) {
@@ -57,6 +66,10 @@ ViewerPanel::ViewerPanel(QWidget* parent) : QWidget(parent) {
     playButton_ = makeButton("▶", tr("Play / pause (Space)"), &ViewerPanel::togglePlay);
     makeButton("▷", tr("Step forward one frame (Right)"), [this] { step(1); });
     makeButton("▶|", tr("Go to end (End)"), &ViewerPanel::goToEnd);
+    bar->addSpacing(12);
+    makeButton("{", tr("Mark in (I)"), [this] { emit markInRequested(position_); });
+    makeButton("}", tr("Mark out (O)"), [this] { emit markOutRequested(position_ + 1); });
+    makeButton("{×}", tr("Clear marks (Alt+X)"), [this] { emit clearMarksRequested(); });
     bar->addStretch(1);
     playbackInfo_ = new QLabel(this);
     playbackInfo_->setAccessibleName(tr("Playback status"));
@@ -80,7 +93,35 @@ ViewerPanel::ViewerPanel(QWidget* parent) : QWidget(parent) {
     audio = std::make_shared<QtAudioOutput>();
 #endif
     engine_ = std::make_unique<playback::PlaybackEngine>(audio);
+    for (QWidget* child : findChildren<QWidget*>()) child->installEventFilter(this);
+    setActive(false);
     updateLabel();
+}
+
+bool ViewerPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::FocusIn) emit activated();
+    return QWidget::eventFilter(watched, event);
+}
+
+void ViewerPanel::setTitle(const QString& title) { title_->setText(title); }
+
+void ViewerPanel::setActive(bool active) {
+    active_ = active;
+    const auto& t = currentTokens();
+    title_->setStyleSheet(QString("QLabel { color: %1; font-weight: %2; border-bottom: 2px solid %3; }")
+                              .arg((active ? t.text : t.textMuted).name(), active ? "bold" : "normal",
+                                   (active ? t.accent : t.border).name()));
+}
+
+void ViewerPanel::setMarks(std::optional<FrameIndex> in, std::optional<FrameIndex> out) { scrub_->setMarks(in, out); }
+
+const Timeline* ViewerPanel::timeline() const {
+    return project_ ? project_->findTimeline(timelineId_) : nullptr;
+}
+
+FrameIndex ViewerPanel::duration() const {
+    const Timeline* tl = timeline();
+    return tl ? tl->duration() : 0;
 }
 
 ViewerPanel::~ViewerPanel() { engine_->stop(); }
@@ -93,11 +134,12 @@ void ViewerPanel::setAudioOutput(std::shared_ptr<playback::AudioOutput> output) 
 int ViewerPanel::droppedFrames() const { return static_cast<int>(engine_->stats().droppedFrames); }
 bool ViewerPanel::playingWithAudio() const { return engine_->isRunning() && engine_->usingAudioClock(); }
 
-void ViewerPanel::setSession(EditorSession* session) {
+void ViewerPanel::setSource(const Project* project, std::string timelineId) {
     stop();
-    session_ = session;
+    project_ = project;
+    timelineId_ = std::move(timelineId);
     compositor_.reset();
-    if (session_) compositor_ = std::make_unique<render::FrameCompositor>(render::resolverFor(session_->project()), 8);
+    if (project_) compositor_ = std::make_unique<render::FrameCompositor>(render::resolverFor(*project_), 8);
     position_ = 0;
     refresh();
 }
@@ -116,16 +158,16 @@ void ViewerPanel::setPosition(FrameIndex frame) {
 }
 
 void ViewerPanel::togglePlay() {
-    if (!session_) return;
+    if (!timeline()) return;
     if (isPlaying()) {
         stop();
         return;
     }
-    const Timeline& tl = session_->timeline();
+    const Timeline& tl = *timeline();
     if (tl.duration() == 0) return;
     if (position_ >= tl.duration() - 1) position_ = 0;
     const QSize size = previewSize();
-    Status s = engine_->start(session_->project(), tl.id, position_, size.width(), size.height());
+    Status s = engine_->start(*project_, tl.id, position_, size.width(), size.height());
     if (!s.ok()) {
         emit errorOccurred(QString::fromStdString(s.error().toString()));
         return;
@@ -161,7 +203,7 @@ void ViewerPanel::goToStart() {
 
 void ViewerPanel::goToEnd() {
     stop();
-    if (session_) setPosition(std::max<FrameIndex>(0, session_->timeline().duration() - 1));
+    setPosition(std::max<FrameIndex>(0, duration() - 1));
 }
 
 void ViewerPanel::refresh() {
@@ -175,7 +217,7 @@ void ViewerPanel::refresh() {
 }
 
 void ViewerPanel::tick() {
-    if (!session_ || !isPlaying()) return;
+    if (!timeline() || !isPlaying()) return;
     if (auto frame = engine_->frameForDisplay()) {
         const VideoFrame& f = frame->image;
         view_->setImage(QImage(f.pixels.data(), f.width, f.height, f.width * 4, QImage::Format_RGBA8888).copy());
@@ -198,19 +240,19 @@ void ViewerPanel::tick() {
 }
 
 QSize ViewerPanel::previewSize() const {
-    const Timeline& tl = session_->timeline();
+    const Timeline& tl = *timeline();
     // Preview at the display size (bounded by the timeline resolution) to keep playback fast.
     const QSize fit = QSize(tl.width, tl.height).scaled(view_->size().boundedTo(QSize(tl.width, tl.height)), Qt::KeepAspectRatio);
     return {std::max(2, fit.width() & ~1), std::max(2, fit.height() & ~1)};
 }
 
 void ViewerPanel::renderCurrent() {
-    if (!session_ || !compositor_) {
+    if (!timeline() || !compositor_) {
         view_->setImage({});
         return;
     }
     const QSize size = previewSize();
-    auto frame = compositor_->render(session_->timeline(), position_, size.width(), size.height());
+    auto frame = compositor_->render(*timeline(), position_, size.width(), size.height());
     if (!frame.ok()) {
         const QString message = QString::fromStdString(frame.error().toString());
         if (message != lastError_) emit errorOccurred(message);
@@ -223,13 +265,76 @@ void ViewerPanel::renderCurrent() {
 }
 
 void ViewerPanel::updateLabel() {
-    if (!session_) {
+    const Timeline* tl = timeline();
+    scrub_->setRange(tl ? tl->duration() : 0);
+    scrub_->setPosition(position_);
+    if (!tl) {
         timecode_->setText("--:--:--:--");
         return;
     }
-    const FrameRate rate = session_->timeline().frameRate;
-    timecode_->setText(QString::fromStdString(formatTimecode(position_, rate)) + " / " +
-                       QString::fromStdString(formatTimecode(session_->timeline().duration(), rate)));
+    timecode_->setText(QString::fromStdString(formatTimecode(position_, tl->frameRate)) + " / " +
+                       QString::fromStdString(formatTimecode(tl->duration(), tl->frameRate)));
+}
+
+ScrubBar::ScrubBar(QWidget* parent) : QWidget(parent) {
+    setMinimumHeight(fontMetrics().height());
+    setFocusPolicy(Qt::NoFocus);
+}
+
+QSize ScrubBar::sizeHint() const { return {200, fontMetrics().height()}; }
+
+void ScrubBar::setRange(FrameIndex duration) {
+    duration_ = duration;
+    update();
+}
+
+void ScrubBar::setPosition(FrameIndex frame) {
+    position_ = frame;
+    update();
+}
+
+void ScrubBar::setMarks(std::optional<FrameIndex> in, std::optional<FrameIndex> out) {
+    markIn_ = in;
+    markOut_ = out;
+    update();
+}
+
+int ScrubBar::xAt(FrameIndex frame) const {
+    if (duration_ <= 0) return 0;
+    return static_cast<int>(static_cast<double>(frame) * (width() - 1) / static_cast<double>(duration_));
+}
+
+FrameIndex ScrubBar::frameAt(int x) const {
+    if (duration_ <= 0 || width() <= 1) return 0;
+    const auto f = static_cast<FrameIndex>(static_cast<double>(x) * static_cast<double>(duration_) / (width() - 1));
+    return std::clamp<FrameIndex>(f, 0, std::max<FrameIndex>(0, duration_ - 1));
+}
+
+void ScrubBar::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    const auto& t = currentTokens();
+    const int mid = height() / 2;
+    p.fillRect(QRect(0, mid - 2, width(), 4), t.border);
+    if (markIn_ || markOut_) {
+        const int x0 = xAt(markIn_.value_or(0));
+        const int x1 = xAt(markOut_.value_or(duration_));
+        QColor range = t.accent;
+        range.setAlpha(140);
+        p.fillRect(QRect(x0, 1, std::max(2, x1 - x0), height() - 2), range);
+        p.setPen(t.accent);
+        if (markIn_) p.drawLine(x0, 0, x0, height());
+        if (markOut_) p.drawLine(x1, 0, x1, height());
+    }
+    const int px = xAt(position_);
+    p.setPen(QPen(t.playhead, 2));
+    p.drawLine(px, 0, px, height());
+}
+
+void ScrubBar::mousePressEvent(QMouseEvent* event) { emit seekRequested(frameAt(event->pos().x())); }
+
+void ScrubBar::mouseMoveEvent(QMouseEvent* event) {
+    if (event->buttons() & Qt::LeftButton) emit seekRequested(frameAt(event->pos().x()));
 }
 
 }  // namespace up::ui
+

@@ -70,7 +70,8 @@ public:
     // `sourceIn`/`duration` default to the whole media (stills default to 5 seconds).
     Result<std::vector<std::string>> placeMedia(const std::string& mediaId, FrameIndex at, ops::EditMode mode,
                                                 std::string videoTrackId = {}, std::string audioTrackId = {},
-                                                FrameIndex sourceIn = 0, FrameIndex duration = 0);
+                                                FrameIndex sourceIn = 0, FrameIndex duration = 0,
+                                                bool useVideo = true, bool useAudio = true);
     Result<std::vector<std::string>> appendMedia(const std::string& mediaId);
 
     // Cuts every clip under `frame` on unlocked tracks. Returns number of clips cut.
@@ -84,6 +85,25 @@ public:
     // Moves a clip (and its linked partners by the same offset) to `trackId` at `newStart`.
     Status moveClip(const std::string& clipId, const std::string& trackId, FrameIndex newStart);
     Status setTrackState(const std::string& trackId, const TrackState& state);
+
+    // --- Three-point editing ------------------------------------------------------
+    // Source marks, in timeline frames from the start of the media (nullopt clears a mark).
+    Status setMediaMarks(const std::string& mediaId, std::optional<FrameIndex> in, std::optional<FrameIndex> out);
+    // Source marks of a media item converted to timeline frames.
+    std::pair<std::optional<FrameIndex>, std::optional<FrameIndex>> mediaMarks(const std::string& mediaId) const;
+    Status setTimelineMarks(std::optional<FrameIndex> in, std::optional<FrameIndex> out);
+    // Source patching; an empty id disables that stream for three-point edits.
+    Status setTrackTargets(const std::string& videoTrackId, const std::string& audioTrackId);
+
+    struct EditResult {
+        std::vector<std::string> clipIds;
+        FrameIndex recordIn = 0;
+        FrameIndex recordOut = 0;
+    };
+    // Insert/overwrite `mediaId` using its source marks, the timeline marks (or the
+    // playhead) and the track targets; see ops::resolveThreePointEdit. Clears the
+    // timeline marks afterwards. One undo step.
+    Result<EditResult> threePointEdit(const std::string& mediaId, ops::EditMode mode, FrameIndex playhead);
 
     bool undo() { return history_.undo(); }
     bool redo() { return history_.redo(); }

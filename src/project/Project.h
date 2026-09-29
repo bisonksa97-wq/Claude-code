@@ -25,6 +25,9 @@ struct MediaItem {
     std::vector<std::string> keywords;
     std::string comment;
     std::string importedAt;  // ISO-8601 UTC
+    // Source in/out marks in seconds from the start of the media ([in, out)).
+    std::optional<double> markIn;
+    std::optional<double> markOut;
 
     // Runtime state, not persisted: whether the file is currently reachable.
     bool online = true;
@@ -46,7 +49,7 @@ struct SequenceSettings {
 
 class Project {
 public:
-    static constexpr int kFormatVersion = 1;
+    static constexpr int kFormatVersion = 2;
 
     std::string id;
     std::string name;

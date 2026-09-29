@@ -104,6 +104,15 @@ void printInfo(const EditorSession& session) {
     std::cout << "\nTimeline: " << tl.name << "  " << tl.width << "x" << tl.height << " @ " << tl.frameRate.toString()
               << "fps, " << tl.sampleRate << "Hz, duration " << formatTimecode(tl.duration(), tl.frameRate) << " ("
               << tl.duration() << " frames)\n";
+    auto trackName = [&](const std::string& id) {
+        const Track* t = tl.track(id);
+        return t ? t->name : std::string("none");
+    };
+    std::cout << "Targets: video " << trackName(tl.videoTarget) << ", audio " << trackName(tl.audioTarget);
+    if (tl.markIn || tl.markOut)
+        std::cout << "   Marks: " << (tl.markIn ? std::to_string(*tl.markIn) : "-") << " .. "
+                  << (tl.markOut ? std::to_string(*tl.markOut) : "-");
+    std::cout << "\n";
     for (const auto& t : tl.tracks) {
         std::cout << "  " << t.name << (t.locked ? " [locked]" : "") << (t.enabled ? "" : " [disabled]")
                   << (t.muted ? " [muted]" : "") << (t.solo ? " [solo]" : "") << "\n";
@@ -144,6 +153,12 @@ Editing (positions/deltas accept frames or HH:MM:SS:FF; clips accept ids or TRAC
   slip <project> <clip> <delta>
   slide <project> <clip> <delta>
   move <project> <clip> <track name> <pos>
+
+Three-point editing (out marks are exclusive; omit an option to clear that mark)
+  mark <project> <media> [--in <pos>] [--out <pos>]      source marks
+  mark-timeline <project> [--in <pos>] [--out <pos>]     record marks
+  target <project> [--video <track>|none] [--audio <track>|none]
+  edit <project> <media> [--insert] [--at <pos>]         insert/overwrite at the record marks or --at
   lift <project> <clip>
   ripple-delete <project> <clip>
 
@@ -319,6 +334,85 @@ int main(int argc, char** argv) {
     commands["ripple-delete"] = clipEdit(2, [](EditorSession& s, const std::string& clip, const cli::Args&) {
         return s.rippleDeleteClip(clip);
     }, "Ripple deleted");
+
+    auto optionalFrame = [&](const cli::Args& a, const char* name, FrameRate rate,
+                             bool& bad) -> std::optional<FrameIndex> {
+        const auto text = a.option(name);
+        if (!text) return std::nullopt;
+        const auto f = parseFrame(*text, rate);
+        if (!f) bad = true;
+        return f;
+    };
+
+    commands["mark"] = {2, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        auto media = resolveMedia(s.value()->project(), pos[1]);
+        if (!media.ok()) return fail(media.error());
+        bool bad = false;
+        const FrameRate rate = s.value()->timeline().frameRate;
+        const auto in = optionalFrame(a, "in", rate, bad);
+        const auto out = optionalFrame(a, "out", rate, bad);
+        if (bad) return usageError("invalid --in/--out");
+        Status st = s.value()->setMediaMarks(media.value(), in, out);
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), "Marked source");
+    }};
+
+    commands["mark-timeline"] = {1, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        bool bad = false;
+        const FrameRate rate = s.value()->timeline().frameRate;
+        const auto in = optionalFrame(a, "in", rate, bad);
+        const auto out = optionalFrame(a, "out", rate, bad);
+        if (bad) return usageError("invalid --in/--out");
+        Status st = s.value()->setTimelineMarks(in, out);
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), "Marked timeline");
+    }};
+
+    commands["target"] = {1, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        const Timeline& tl = s.value()->timeline();
+        auto resolve = [&](const char* opt, const std::string& current, std::string& out) -> bool {
+            const auto v = a.option(opt);
+            if (!v) {
+                out = current;
+                return true;
+            }
+            if (*v == "none") {
+                out.clear();
+                return true;
+            }
+            for (const auto& t : tl.tracks)
+                if (t.name == *v) {
+                    out = t.id;
+                    return true;
+                }
+            return false;
+        };
+        std::string video, audio;
+        if (!resolve("video", tl.videoTarget, video) || !resolve("audio", tl.audioTarget, audio))
+            return usageError("unknown track name (use e.g. V1, A2 or none)");
+        Status st = s.value()->setTrackTargets(video, audio);
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), "Targets updated");
+    }};
+
+    commands["edit"] = {2, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        auto media = resolveMedia(s.value()->project(), pos[1]);
+        if (!media.ok()) return fail(media.error());
+        const auto at = parseFrame(a.option("at").value_or("0"), s.value()->timeline().frameRate);
+        if (!at) return usageError("invalid --at");
+        auto r = s.value()->threePointEdit(media.value(), a.flag("insert") ? ops::EditMode::Insert : ops::EditMode::Overwrite, *at);
+        if (!r.ok()) return fail(r.error());
+        return saveAndReport(*s.value(), std::string(a.flag("insert") ? "Inserted" : "Overwrote") + " frames [" +
+                                             std::to_string(r.value().recordIn) + ", " + std::to_string(r.value().recordOut) + ")");
+    }};
 
     commands["export"] = {2, [&](const cli::Args& a) {
         auto s = openProject(pos[0]);

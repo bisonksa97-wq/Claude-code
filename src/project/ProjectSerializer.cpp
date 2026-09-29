@@ -13,6 +13,17 @@ namespace fs = std::filesystem;
 
 namespace {
 
+template <typename T>
+json optionalToJson(const std::optional<T>& v) {
+    return v ? json(*v) : json(nullptr);
+}
+
+template <typename T>
+std::optional<T> optionalFromJson(const json& j, const char* key) {
+    if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+    return j.at(key).get<T>();
+}
+
 std::string pathToUtf8(const fs::path& p) {
     const auto u8 = p.generic_u8string();
     return std::string(u8.begin(), u8.end());
@@ -100,8 +111,15 @@ Track trackFromJson(const json& j) {
 json toJson(const Timeline& t) {
     json tracks = json::array();
     for (const auto& tr : t.tracks) tracks.push_back(toJson(tr));
-    return json{{"id", t.id},         {"name", t.name},     {"frameRate", t.frameRate.toString()},
-                {"width", t.width},   {"height", t.height}, {"sampleRate", t.sampleRate},
+    return json{{"id", t.id},
+                {"name", t.name},
+                {"frameRate", t.frameRate.toString()},
+                {"width", t.width},
+                {"height", t.height},
+                {"sampleRate", t.sampleRate},
+                {"markIn", optionalToJson(t.markIn)},
+                {"markOut", optionalToJson(t.markOut)},
+                {"targets", {{"video", t.videoTarget}, {"audio", t.audioTarget}}},
                 {"tracks", tracks}};
 }
 
@@ -114,6 +132,11 @@ Timeline timelineFromJson(const json& j) {
     t.height = j.value("height", 1080);
     t.sampleRate = j.value("sampleRate", 48000);
     for (const auto& tr : j.value("tracks", json::array())) t.tracks.push_back(trackFromJson(tr));
+    t.markIn = optionalFromJson<FrameIndex>(j, "markIn");
+    t.markOut = optionalFromJson<FrameIndex>(j, "markOut");
+    const json targets = j.value("targets", json::object());
+    t.videoTarget = targets.value("video", "");
+    t.audioTarget = targets.value("audio", "");
     return t;
 }
 
@@ -138,7 +161,9 @@ std::string ProjectSerializer::toJson(const Project& p, const fs::path& projectF
                              {"rating", m.rating},
                              {"keywords", m.keywords},
                              {"comment", m.comment},
-                             {"importedAt", m.importedAt}});
+                             {"importedAt", m.importedAt},
+                             {"markIn", optionalToJson(m.markIn)},
+                             {"markOut", optionalToJson(m.markOut)}});
     }
     json bins = json::array();
     for (const auto& b : p.bins) bins.push_back(json{{"id", b.id}, {"name", b.name}, {"parentId", b.parentId}});
@@ -199,6 +224,8 @@ Result<Project> ProjectSerializer::fromJson(const std::string& text, const fs::p
             m.keywords = mj.value("keywords", std::vector<std::string>{});
             m.comment = mj.value("comment", "");
             m.importedAt = mj.value("importedAt", "");
+            m.markIn = optionalFromJson<double>(mj, "markIn");
+            m.markOut = optionalFromJson<double>(mj, "markOut");
             p.media.push_back(std::move(m));
         }
         for (const auto& tj : doc.value("timelines", json::array())) {

@@ -217,6 +217,77 @@ TEST(Ui, QtAudioOutputReportsMissingDeviceClearly) {
 }
 #endif
 
+TEST(Ui, SourceMonitorThreePointEdit) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 50));
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 40));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1280, 800);
+    auto session = EditorSession::createNew("3pt", SequenceSettings{FrameRate{25, 1}, 320, 240, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());  // red on V1/A1, frames 0..50
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const QString blue = QString::fromStdString(ids[1]);
+
+    // Load the source: the source monitor becomes active and shows the whole clip.
+    ASSERT_TRUE(window.loadSource(blue));
+    ui::ViewerPanel* source = window.sourceViewer();
+    EXPECT_EQ(window.activeViewer(), source);
+    EXPECT_EQ(source->duration(), 40);
+    QApplication::processEvents();
+    EXPECT_GT(source->currentImage().pixelColor(5, 5).blue(), 180);
+
+    // Mark source in/out with the keyboard actions (they address the active monitor).
+    source->setPosition(10);
+    findAction(&window, "Mark In")->trigger();
+    source->setPosition(19);
+    findAction(&window, "Mark Out")->trigger();  // out is exclusive: includes frame 19
+    const auto [in, out] = window.session()->mediaMarks(ids[1]);
+    EXPECT_EQ(in, 10);
+    EXPECT_EQ(out, 20);
+
+    // Patch video to V2 by clicking its target box, and disable audio (click A1's box).
+    ui::TimelineView* tv = window.timeline();
+    const auto rows = tv->rowTrackIds();  // V2, V1, A1, A2
+    const int size = tv->rowTop(1) - tv->rowTop(0);
+    const QPoint v2Box(8, tv->rowTop(0) + size - size / 6 - 6);
+    const QPoint a1Box(8, tv->rowTop(2) + size - size / 6 - 6);
+    QTest::mouseClick(tv, Qt::LeftButton, Qt::NoModifier, v2Box);
+    QTest::mouseClick(tv, Qt::LeftButton, Qt::NoModifier, a1Box);
+    const Timeline& tl = window.session()->timeline();
+    EXPECT_EQ(tl.videoTarget, rows[0]);
+    EXPECT_TRUE(tl.audioTarget.empty());
+
+    // Program monitor: mark the record in at 30, then overwrite.
+    window.setActiveViewer(window.viewer());
+    window.viewer()->setPosition(30);
+    findAction(&window, "Mark In")->trigger();
+    EXPECT_EQ(tl.markIn, 30);
+    findAction(&window, "Overwrite Edit")->trigger();
+    const Track& v2 = tl.tracks[1];
+    ASSERT_EQ(v2.clips.size(), 1u);
+    EXPECT_EQ(v2.clips[0].start, 30);
+    EXPECT_EQ(v2.clips[0].sourceIn, 10);
+    EXPECT_EQ(v2.clips[0].duration, 10);
+    EXPECT_EQ(tl.tracks[2].clips.size(), 1u);  // audio untouched: target disabled
+    EXPECT_FALSE(tl.markIn.has_value());
+    EXPECT_EQ(window.viewer()->position(), 40);  // playhead parked after the edit
+    window.viewer()->setPosition(35);
+    QApplication::processEvents();
+    const QImage mid = window.viewer()->currentImage();
+    EXPECT_GT(mid.pixelColor(mid.width() / 2, mid.height() / 2).blue(), 180);  // V2 covers V1
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_3PT")) {
+        source->setPosition(15);
+        ASSERT_TRUE(window.session()->setTimelineMarks(5, 20).ok());
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+}
+
 TEST(Ui, ThemesUseCentralTokens) {
     for (auto kind : {ui::ThemeKind::Dark, ui::ThemeKind::Light, ui::ThemeKind::HighContrast}) {
         ui::applyTheme(*qApp, kind);

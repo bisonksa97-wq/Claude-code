@@ -34,6 +34,8 @@ Timeline Timeline::create(std::string name, FrameRate rate, int width, int heigh
     t.sampleRate = sampleRate;
     for (int i = 0; i < videoTracks; ++i) t.addTrack(TrackKind::Video);
     for (int i = 0; i < audioTracks; ++i) t.addTrack(TrackKind::Audio);
+    if (const auto v = t.trackIdsOfKind(TrackKind::Video); !v.empty()) t.videoTarget = v.front();
+    if (const auto a = t.trackIdsOfKind(TrackKind::Audio); !a.empty()) t.audioTarget = a.front();
     return t;
 }
 
@@ -115,6 +117,14 @@ Status Timeline::validate() const {
                          "Undo the last operation and report this problem.");
     };
     if (!frameRate.valid()) return fail("invalid frame rate " + frameRate.toString());
+    if ((markIn && *markIn < 0) || (markIn && markOut && *markOut <= *markIn)) return fail("marks out of order");
+    auto checkTarget = [&](const std::string& trackId, TrackKind kind) {
+        if (trackId.empty()) return true;
+        const Track* t = track(trackId);
+        return t && t->kind == kind;
+    };
+    if (!checkTarget(videoTarget, TrackKind::Video) || !checkTarget(audioTarget, TrackKind::Audio))
+        return fail("a source target refers to a missing track or one of the wrong kind");
     std::set<std::string> ids;
     for (const auto& t : tracks) {
         if (!ids.insert(t.id).second) return fail("duplicate track id " + t.id);

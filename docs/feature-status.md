@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 3._
+_Last updated: session 4._
 
 ## First vertical slice (§90)
 
@@ -28,9 +28,9 @@ _Last updated: session 3._
 |---|---|---|---|
 | 1 | Media management | PARTIAL | Import, probe metadata, search, offline detection, relink/replace. **Thumbnails** in the media pool (small/large toggle) and on video clips, **waveforms** on audio clips, generated in the background and cached. Bins exist in the model (one "Master" bin); there is no bin UI, ratings/keywords UI, filmstrip view or hover scrub. |
 | 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
-| 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims. No Cut workspace. |
+| 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims, **source monitor with three-point insert/overwrite** (I/O marks, `,` and `.`), source patching. No Cut workspace, no match frame, no J/K/L. |
 | 4 | Multicam | NOT IMPLEMENTED | |
-| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Missing: in/out points, markers, track targeting UI, adding/removing tracks in the UI. |
+| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks and track targeting. Missing: markers, adding/removing tracks in the UI, copy/paste. |
 | 6 | Text-based editing | NOT IMPLEMENTED | |
 | 7–15 | Motion graphics, 2D/3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
@@ -58,7 +58,7 @@ _Last updated: session 3._
 |---|---|---|
 | Undo/redo (§16) | IMPLEMENTED | Command stack with groups/transactions, configurable limit, clean-state tracking. Timeline edits use exact snapshots. |
 | Autosave / crash recovery (§74) | IMPLEMENTED | Periodic autosave (setting `autosave/intervalSeconds`, default 120), recovery prompts on open and at startup, transactional writes. No crash-report capture yet. |
-| Versioned format + migrations (§8) | IMPLEMENTED | Framework and tests; no real migration exists yet because v1 is the first format. |
+| Versioned format + migrations (§8) | IMPLEMENTED | Format v2 with a real v1 → v2 migration, tested against a verbatim v1 document. |
 | Human-readable errors (§76) | IMPLEMENTED | Error id, message, suggestion, technical details; copyable in UI dialogs. |
 | Logging (§77) | IMPLEMENTED | Per-subsystem levels; log file in the app-data folder. |
 | Themes / design tokens (§69) | IMPLEMENTED | Dark, light, high contrast. |

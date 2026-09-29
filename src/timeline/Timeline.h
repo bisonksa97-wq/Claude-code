@@ -65,6 +65,14 @@ public:
     int sampleRate = 48000;
     std::vector<Track> tracks;
 
+    // Record in/out marks for three-point editing ([markIn, markOut), frames).
+    std::optional<FrameIndex> markIn;
+    std::optional<FrameIndex> markOut;
+    // Source patching: the tracks that receive a source's video/audio in
+    // three-point edits. Empty = that stream is not edited in.
+    std::string videoTarget;
+    std::string audioTarget;
+
     // Creates a timeline with `videoTracks` video and `audioTracks` audio tracks.
     static Timeline create(std::string name, FrameRate rate, int width, int height, int sampleRate,
                            int videoTracks = 2, int audioTracks = 2);
@@ -89,7 +97,8 @@ public:
     FrameIndex duration() const;
 
     // Verifies structural invariants (sorted, non-overlapping, positive durations,
-    // source ranges in bounds, unique ids). Used by tests and after loading.
+    // source ranges in bounds, unique ids, marks ordered, targets of the right kind).
+    // Used by tests and after loading.
     Status validate() const;
 };
 

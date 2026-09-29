@@ -16,7 +16,7 @@ Dependencies only point downward.
 | media | `up_media` | Import, offline detection, relink validation, search, synthetic test media, thumbnail/waveform generators and formats | core, project, codec |
 | render | `up_render` | `FrameCompositor`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
 | playback | `up_playback` | `PlaybackEngine` (real-time A/V playback), `AudioOutput`/`Clock` interfaces, `SampleFifo` | core, project, render |
-| app | `up_app` | `EditorSession` application services and undoable project commands; `MediaAssets` (async thumbnails and waveforms) | all of the above |
+| app | `up_app` | `EditorSession` application services and undoable project commands; `MediaAssets` (async thumbnails and waveforms); `makeSourceProject` (one-clip projects for the source monitor) | all of the above |
 | cli | `ultimatepost` | Command-line front end | app |
 | ui | `up_ui`, `ultimatepost-studio` | Qt Widgets front end; `QtAudioOutput` adapter (Qt Multimedia, optional) | app, playback, Qt 6 |
 
@@ -42,6 +42,10 @@ The rest are listed in [roadmap.md](roadmap.md).
 - `PlaybackEngine` also works on a project **copy**. It runs an audio worker (mixes ahead into a 500 ms `SampleFifo` that the device pulls from) and a video worker (renders up to 6 frames ahead at preview size). The UI thread only polls `frameForDisplay()` and `position()`. Edits during playback restart the engine from the current frame with a fresh snapshot.
 - Playback threads were checked with ThreadSanitizer. The only reports are inside uninstrumented FFmpeg and Qt thread pools, with none in Ultimate Post code.
 - FFmpeg's internal frame threading is enabled in the video decoder.
+
+## Monitors
+
+The window has a **source** and a **program** monitor, both `ViewerPanel` instances. A viewer shows any (project, timeline) pair and never edits: its mark buttons emit requests that `MainWindow` routes to `EditorSession`. The program monitor shows the session's timeline. The source monitor shows a one-clip project built by `makeSourceProject`, whose frame N is source frame N, so it reuses the same compositor, playback engine and audio path. Keyboard transport and mark commands address the **active** monitor (highlighted title); clicking a monitor or the timeline changes it.
 
 ## Crash safety
 

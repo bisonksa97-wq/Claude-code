@@ -98,6 +98,8 @@ private:
     void drawClip(QPainter& p, const Clip& clip, const QRect& r, bool isVideo) const;
     void drawWaveform(QPainter& p, const Clip& clip, const QRect& r, const media::WaveformPeaks& peaks) const;
     QRect toggleRect(int row, int index) const;
+    // Source-patch box at the left of a track header (filled = this track receives the source).
+    QRect targetRect(int row) const;
 
     EditorSession* session_ = nullptr;
     MediaAssets* assets_ = nullptr;

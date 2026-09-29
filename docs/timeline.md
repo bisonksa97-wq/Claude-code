@@ -33,6 +33,20 @@ Every operation is **all-or-nothing**: it runs on a copy, validates, and commits
 | `moveClip` | Moves to a position/track of the same kind with overwrite semantics |
 | `insertGap`, `clearRange` | Building blocks for sync-locked edits |
 
+## Three-point editing (`timeline/ThreePointEdit.h`)
+
+`resolveThreePointEdit` is a pure function of the source marks, record (timeline) marks, playhead and source length:
+
+| Quantity | Rule |
+|---|---|
+| Duration | Record range if both record marks are set (a four-point edit fits the timeline range and keeps the source in); else the source range; else source out alone (from frame 0); else from source in (or 0) to the end of the media; still images use 5 s |
+| Source in | Source in mark; else backtimed from source out; else 0 |
+| Record in | Record in mark; else backtimed from record out; else the playhead |
+
+It fails with a readable error when the edit would run past either end of the media or start before frame 0. All 16 mark combinations are tested.
+
+`EditorSession::threePointEdit` applies the result with the timeline's **targets** (source patching). A disabled target skips that stream. The edit is an overwrite or a sync-locked insert. The timeline marks are cleared afterwards, and all of it is one undo step. Marks are out-exclusive: "Mark Out" on a frame includes that frame.
+
 ## Session-level behaviour (`EditorSession`)
 
 - `placeMedia` creates linked video and audio clips. **Insert** opens a gap on every unlocked track first, so all tracks stay in sync.

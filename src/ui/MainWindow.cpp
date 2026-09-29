@@ -13,6 +13,7 @@
 #include <QMessageBox>
 #include <QProgressDialog>
 #include <QSettings>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
 #include <atomic>
@@ -20,6 +21,7 @@
 
 #include "app/EditorSession.h"
 #include "app/MediaAssets.h"
+#include "app/SourceProject.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
 #include "ui/MediaPoolPanel.h"
@@ -41,8 +43,16 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     setObjectName("MainWindow");
     setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
 
-    viewer_ = new ViewerPanel(this);
-    setCentralWidget(viewer_);
+    // Source monitor (left) and program monitor (right).
+    auto* monitors = new QSplitter(Qt::Horizontal, this);
+    sourceViewer_ = new ViewerPanel(monitors);
+    sourceViewer_->setObjectName("SourceViewer");
+    sourceViewer_->setTitle(tr("Source — double-click media to load"));
+    viewer_ = new ViewerPanel(monitors);
+    viewer_->setObjectName("ProgramViewer");
+    monitors->addWidget(sourceViewer_);
+    monitors->addWidget(viewer_);
+    setCentralWidget(monitors);
 
     mediaPool_ = new MediaPoolPanel(this);
     auto* poolDock = new QDockWidget(tr("Media Pool"), this);
@@ -64,7 +74,17 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     connect(viewer_, &ViewerPanel::positionChanged, tv, &TimelineView::setPlayhead);
     connect(tv, &TimelineView::errorOccurred, this, [this](const QString& m) { showError(tr("The edit could not be applied."), m); });
     connect(tv, &TimelineView::statusMessage, this, [this](const QString& m) { statusBar()->showMessage(m, 2000); });
-    connect(viewer_, &ViewerPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m.section('\n', 0, 0), 5000); });
+    for (ViewerPanel* v : {viewer_, sourceViewer_}) {
+        connect(v, &ViewerPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m.section('\n', 0, 0), 5000); });
+        connect(v, &ViewerPanel::activated, this, [this, v] { setActiveViewer(v); });
+        connect(v, &ViewerPanel::markInRequested, this, [this, v](FrameIndex f) { markIn(v, f); });
+        connect(v, &ViewerPanel::markOutRequested, this, [this, v](FrameIndex f) { markOut(v, f); });
+        connect(v, &ViewerPanel::clearMarksRequested, this, [this, v] { clearMarks(v); });
+    }
+    connect(tv, &TimelineView::playheadMoved, this, [this] { setActiveViewer(viewer_); });
+    connect(tv, &TimelineView::selectionChanged, this, [this] { setActiveViewer(viewer_); });
+    connect(mediaPool_, &MediaPoolPanel::mediaActivated, this, [this](const QString& id) { loadSource(id); });
+    setActiveViewer(viewer_);
     connect(mediaPool_, &MediaPoolPanel::importRequested, this, &MainWindow::importMedia);
     connect(mediaPool_, &MediaPoolPanel::relinkRequested, this, &MainWindow::relinkMedia);
 
@@ -97,6 +117,8 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
 }
 
 MainWindow::~MainWindow() {
+    viewer_->stop();
+    sourceViewer_->stop();
     // Stop background asset jobs before any widget they notify is destroyed.
     assets_->setListener({});
     assets_.reset();
@@ -124,12 +146,16 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
         timeline()->update();
         timeline()->viewChanged();
         viewer_->refresh();
+        syncSourceAndMarks();
         updateTitleAndActions();
     });
     assets_->prefetch(session_->project());
     mediaPool_->setSession(session_.get());
     timeline()->setSession(session_.get());
-    viewer_->setSession(session_.get());
+    viewer_->setSource(&session_->project(), session_->timeline().id);
+    viewer_->setTitle(tr("Program — %1").arg(qs(session_->timeline().name)));
+    clearSource();
+    syncSourceAndMarks();
     QTimer::singleShot(0, timeline(), &TimelineView::zoomToFit);
     updateTitleAndActions();
 }
@@ -185,11 +211,22 @@ void MainWindow::buildMenus() {
     add(edit, tr("Slide +1 Frame"), QKeySequence("Ctrl+Alt+."), [this] { slideSelected(1); });
 
     QMenu* playback = menuBar()->addMenu(tr("&Playback"));
-    add(playback, tr("Play / Pause"), QKeySequence(Qt::Key_Space), [this] { viewer_->togglePlay(); });
-    add(playback, tr("Step Back"), QKeySequence(Qt::Key_Left), [this] { viewer_->step(-1); });
-    add(playback, tr("Step Forward"), QKeySequence(Qt::Key_Right), [this] { viewer_->step(1); });
-    add(playback, tr("Go to Start"), QKeySequence(Qt::Key_Home), [this] { viewer_->goToStart(); });
-    add(playback, tr("Go to End"), QKeySequence(Qt::Key_End), [this] { viewer_->goToEnd(); });
+    // Transport and marks address the active monitor (highlighted title; click a monitor to activate it).
+    add(playback, tr("Play / Pause"), QKeySequence(Qt::Key_Space), [this] { activeViewer_->togglePlay(); });
+    add(playback, tr("Step Back"), QKeySequence(Qt::Key_Left), [this] { activeViewer_->step(-1); });
+    add(playback, tr("Step Forward"), QKeySequence(Qt::Key_Right), [this] { activeViewer_->step(1); });
+    add(playback, tr("Go to Start"), QKeySequence(Qt::Key_Home), [this] { activeViewer_->goToStart(); });
+    add(playback, tr("Go to End"), QKeySequence(Qt::Key_End), [this] { activeViewer_->goToEnd(); });
+    playback->addSeparator();
+    add(playback, tr("Toggle Source / Program Monitor"), QKeySequence("Shift+2"),
+        [this] { setActiveViewer(activeViewer_ == viewer_ ? sourceViewer_ : viewer_); });
+    add(playback, tr("Mark In"), QKeySequence(Qt::Key_I), [this] { markIn(activeViewer_, activeViewer_->position()); });
+    add(playback, tr("Mark Out"), QKeySequence(Qt::Key_O), [this] { markOut(activeViewer_, activeViewer_->position() + 1); });
+    add(playback, tr("Clear In and Out"), QKeySequence("Alt+X"), [this] { clearMarks(activeViewer_); });
+
+    edit->addSeparator();
+    add(edit, tr("Insert Edit"), QKeySequence(Qt::Key_Comma), [this] { threePointEdit(ops::EditMode::Insert); });
+    add(edit, tr("Overwrite Edit"), QKeySequence(Qt::Key_Period), [this] { threePointEdit(ops::EditMode::Overwrite); });
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     add(view, tr("Zoom In"), QKeySequence("="), [this] { timeline()->zoomIn(); });
@@ -478,4 +515,115 @@ void MainWindow::slideSelected(int delta) {
     if (!id.isEmpty()) runEdit([&] { return session_->slideClip(id.toStdString(), delta); });
 }
 
+void MainWindow::setActiveViewer(ViewerPanel* viewer) {
+    activeViewer_ = viewer;
+    viewer_->setActive(viewer == viewer_);
+    sourceViewer_->setActive(viewer == sourceViewer_);
+}
+
+void MainWindow::clearSource() {
+    sourceViewer_->setSource(nullptr, {});
+    sourceProject_.reset();
+    sourceMediaId_.clear();
+    sourceViewer_->setTitle(tr("Source — double-click media to load"));
+    sourceViewer_->setMarks(std::nullopt, std::nullopt);
+    if (activeViewer_ == sourceViewer_) setActiveViewer(viewer_);
+}
+
+bool MainWindow::loadSource(const QString& mediaId) {
+    auto project = makeSourceProject(session_->project(), mediaId.toStdString());
+    if (!project.ok()) {
+        showError(tr("The media could not be opened in the source monitor."), qs(project.error().toString()));
+        return false;
+    }
+    sourceViewer_->stop();
+    sourceProject_ = std::make_unique<Project>(std::move(project.value()));
+    sourceMediaId_ = mediaId.toStdString();
+    sourceViewer_->setSource(sourceProject_.get(), sourceProject_->activeTimelineId);
+    sourceViewer_->setTitle(tr("Source — %1").arg(qs(sourceProject_->name)));
+    // Start at the source in mark, as editors expect when reloading a marked clip.
+    const auto [in, out] = session_->mediaMarks(sourceMediaId_);
+    sourceViewer_->setMarks(in, out);
+    if (in) sourceViewer_->setPosition(*in);
+    setActiveViewer(sourceViewer_);
+    return true;
+}
+
+void MainWindow::syncSourceAndMarks() {
+    const Timeline& tl = session_->timeline();
+    viewer_->setMarks(tl.markIn, tl.markOut);
+    if (sourceMediaId_.empty()) return;
+    const MediaItem* media = session_->project().findMedia(sourceMediaId_);
+    if (!media) {  // e.g. the import that added it was undone
+        clearSource();
+        return;
+    }
+    const MediaItem& shown = sourceProject_->media.front();
+    if (shown.path != media->path || shown.online != media->online) {
+        const FrameIndex position = sourceViewer_->position();
+        loadSource(QString::fromStdString(sourceMediaId_));  // relinked: rebuild the source view
+        sourceViewer_->setPosition(position);
+    }
+    const auto [in, out] = session_->mediaMarks(sourceMediaId_);
+    sourceViewer_->setMarks(in, out);
+}
+
+void MainWindow::markIn(ViewerPanel* viewer, FrameIndex frame) {
+    Status s = Status::success();
+    if (viewer == sourceViewer_) {
+        if (sourceMediaId_.empty()) return;
+        auto [in, out] = session_->mediaMarks(sourceMediaId_);
+        if (out && *out <= frame) out.reset();  // a new in after the out starts a new range
+        s = session_->setMediaMarks(sourceMediaId_, frame, out);
+    } else {
+        auto out = session_->timeline().markOut;
+        if (out && *out <= frame) out.reset();
+        s = session_->setTimelineMarks(frame, out);
+    }
+    if (!s.ok()) statusBar()->showMessage(qs(s.error().message), 4000);
+}
+
+void MainWindow::markOut(ViewerPanel* viewer, FrameIndex frame) {
+    Status s = Status::success();
+    if (viewer == sourceViewer_) {
+        if (sourceMediaId_.empty()) return;
+        auto [in, out] = session_->mediaMarks(sourceMediaId_);
+        if (in && *in >= frame) in.reset();
+        s = session_->setMediaMarks(sourceMediaId_, in, frame);
+    } else {
+        auto in = session_->timeline().markIn;
+        if (in && *in >= frame) in.reset();
+        s = session_->setTimelineMarks(in, frame);
+    }
+    if (!s.ok()) statusBar()->showMessage(qs(s.error().message), 4000);
+}
+
+void MainWindow::clearMarks(ViewerPanel* viewer) {
+    Status s = Status::success();
+    if (viewer == sourceViewer_) {
+        if (!sourceMediaId_.empty()) s = session_->setMediaMarks(sourceMediaId_, std::nullopt, std::nullopt);
+    } else {
+        s = session_->setTimelineMarks(std::nullopt, std::nullopt);
+    }
+    if (!s.ok()) statusBar()->showMessage(qs(s.error().message), 4000);
+}
+
+bool MainWindow::threePointEdit(ops::EditMode mode) {
+    if (sourceMediaId_.empty()) {
+        statusBar()->showMessage(tr("Load a clip into the source monitor first (double-click it in the Media Pool)."), 5000);
+        return false;
+    }
+    auto r = session_->threePointEdit(sourceMediaId_, mode, viewer_->position());
+    if (!r.ok()) {
+        showError(tr("The edit could not be applied."), qs(r.error().toString()));
+        return false;
+    }
+    // Like other NLEs, park the program playhead after the new material.
+    viewer_->setPosition(r.value().recordOut);
+    if (!r.value().clipIds.empty()) timeline()->selectClip(qs(r.value().clipIds.front()));
+    statusBar()->showMessage(mode == ops::EditMode::Insert ? tr("Inserted") : tr("Overwrote"), 3000);
+    return true;
+}
+
 }  // namespace up::ui
+

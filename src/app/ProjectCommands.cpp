@@ -54,6 +54,24 @@ void AddMediaCommand::revert() {
                 media.end());
 }
 
+Status UpdateMediaCommand::apply() {
+    MediaItem* m = project_.findMedia(updated_.id);
+    if (!m) return makeError(ErrorCode::NotFound, "media", "The media item no longer exists.");
+    before_ = *m;
+    MediaItem next = updated_;
+    next.online = m->online;  // runtime state is not part of the edit
+    *m = std::move(next);
+    return Status::success();
+}
+
+void UpdateMediaCommand::revert() {
+    if (MediaItem* m = project_.findMedia(updated_.id); m && before_) {
+        const bool online = m->online;
+        *m = *before_;
+        m->online = online;
+    }
+}
+
 RelinkMediaCommand::RelinkMediaCommand(Project& project, std::string mediaId, std::filesystem::path newPath,
                                        MediaInfo newInfo)
     : project_(project), mediaId_(std::move(mediaId)), newPath_(std::move(newPath)), newInfo_(std::move(newInfo)) {}

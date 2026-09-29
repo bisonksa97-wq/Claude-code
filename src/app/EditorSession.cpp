@@ -9,6 +9,7 @@
 #include "core/Log.h"
 #include "media/MediaLibrary.h"
 #include "project/ProjectSerializer.h"
+#include "timeline/ThreePointEdit.h"
 
 namespace up {
 namespace fs = std::filesystem;
@@ -189,7 +190,7 @@ Status EditorSession::editTimeline(const std::string& name, std::function<Status
 Result<std::vector<std::string>> EditorSession::placeMedia(const std::string& mediaId, FrameIndex at,
                                                            ops::EditMode mode, std::string videoTrackId,
                                                            std::string audioTrackId, FrameIndex sourceIn,
-                                                           FrameIndex duration) {
+                                                           FrameIndex duration, bool useVideo, bool useAudio) {
     const MediaItem* media = project_.findMedia(mediaId);
     if (!media) {
         return makeError(ErrorCode::NotFound, "media", "The media item does not exist in this project.",
@@ -205,8 +206,13 @@ Result<std::vector<std::string>> EditorSession::placeMedia(const std::string& me
                          "'" + media->name + "' is too short for the requested range.",
                          "Choose an in/out range within the media.");
     }
-    const bool wantVideo = media->info.hasVideo;
-    const bool wantAudio = media->info.hasAudio;
+    const bool wantVideo = media->info.hasVideo && useVideo;
+    const bool wantAudio = media->info.hasAudio && useAudio;
+    if (!wantVideo && !wantAudio) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "Nothing to edit in: no stream of '" + media->name +
+                                                                     "' is selected.",
+                         "Enable a video or audio source target.");
+    }
     if (wantVideo && videoTrackId.empty()) {
         const Track* t = firstUnlocked(tl, TrackKind::Video);
         if (!t) return makeError(ErrorCode::Locked, "timeline", "All video tracks are locked.", "Unlock a video track.");
@@ -384,6 +390,88 @@ Status EditorSession::setTrackState(const std::string& trackId, const TrackState
         track->gainDb = state.gainDb;
         return Status::success();
     });
+}
+
+Status EditorSession::setMediaMarks(const std::string& mediaId, std::optional<FrameIndex> in,
+                                    std::optional<FrameIndex> out) {
+    const MediaItem* media = project_.findMedia(mediaId);
+    if (!media) return makeError(ErrorCode::NotFound, "media", "The media item does not exist in this project.");
+    const FrameRate rate = timeline().frameRate;
+    const FrameIndex length = media::lengthInFrames(media->info, rate);
+    if ((in && *in < 0) || (out && *out <= 0) || (in && out && *out <= *in) || (length > 0 && out && *out > length) ||
+        (length > 0 && in && *in >= length)) {
+        return makeError(ErrorCode::OutOfRange, "media", "The source marks must lie inside the media with in before out.",
+                         "Move the playhead inside the clip before marking.");
+    }
+    MediaItem updated = *media;
+    updated.markIn = in ? std::optional<double>(framesToSeconds(*in, rate)) : std::nullopt;
+    updated.markOut = out ? std::optional<double>(framesToSeconds(*out, rate)) : std::nullopt;
+    return history_.execute(std::make_unique<UpdateMediaCommand>(project_, std::move(updated), "Mark Source"));
+}
+
+std::pair<std::optional<FrameIndex>, std::optional<FrameIndex>> EditorSession::mediaMarks(const std::string& mediaId) const {
+    const MediaItem* media = project_.findMedia(mediaId);
+    if (!media) return {};
+    const FrameRate rate = timeline().frameRate;
+    auto toFrames = [&](const std::optional<double>& s) -> std::optional<FrameIndex> {
+        if (!s) return std::nullopt;
+        return secondsToFrames(*s, rate);
+    };
+    return {toFrames(media->markIn), toFrames(media->markOut)};
+}
+
+Status EditorSession::setTimelineMarks(std::optional<FrameIndex> in, std::optional<FrameIndex> out) {
+    if ((in && *in < 0) || (in && out && *out <= *in) || (out && *out <= 0)) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "The timeline in mark must come before the out mark.",
+                         "Set the marks again in order.");
+    }
+    return editTimeline("Mark Timeline", [&](Timeline& t) -> Status {
+        t.markIn = in;
+        t.markOut = out;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setTrackTargets(const std::string& videoTrackId, const std::string& audioTrackId) {
+    return editTimeline("Target Tracks", [&](Timeline& t) -> Status {
+        t.videoTarget = videoTrackId;
+        t.audioTarget = audioTrackId;
+        return Status::success();  // validate() rejects missing tracks or wrong kinds
+    });
+}
+
+Result<EditorSession::EditResult> EditorSession::threePointEdit(const std::string& mediaId, ops::EditMode mode,
+                                                                FrameIndex playhead) {
+    const MediaItem* media = project_.findMedia(mediaId);
+    if (!media) return makeError(ErrorCode::NotFound, "media", "The media item does not exist in this project.");
+    const Timeline& tl = timeline();
+    const bool useVideo = media->info.hasVideo && !tl.videoTarget.empty();
+    const bool useAudio = media->info.hasAudio && !tl.audioTarget.empty();
+    if (!useVideo && !useAudio) {
+        return makeError(ErrorCode::InvalidArgument, "timeline",
+                         "No target track is enabled for the streams of '" + media->name + "'.",
+                         "Click a track's target box in the timeline header to patch the source to it.");
+    }
+    const auto [srcIn, srcOut] = mediaMarks(mediaId);
+    ops::ThreePointInput input;
+    input.sourceIn = srcIn;
+    input.sourceOut = srcOut;
+    input.recordIn = tl.markIn;
+    input.recordOut = tl.markOut;
+    input.playhead = playhead;
+    input.sourceLength = media::lengthInFrames(media->info, tl.frameRate);
+    input.defaultDuration = secondsToFrames(5.0, tl.frameRate);
+    auto resolved = ops::resolveThreePointEdit(input);
+    if (!resolved.ok()) return resolved.error();
+    const ops::ThreePointResult r = resolved.value();
+
+    Transaction tx(history_, mode == ops::EditMode::Insert ? "Insert Edit" : "Overwrite Edit");
+    auto placed = placeMedia(mediaId, r.recordIn, mode, tl.videoTarget, tl.audioTarget, r.sourceIn, r.duration,
+                             useVideo, useAudio);
+    if (!placed.ok()) return placed.error();
+    if (tl.markIn || tl.markOut) UP_TRY(setTimelineMarks(std::nullopt, std::nullopt));
+    tx.commit();
+    return EditResult{placed.value(), r.recordIn, r.recordOut()};
 }
 
 }  // namespace up

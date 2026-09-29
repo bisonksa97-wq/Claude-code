@@ -195,3 +195,71 @@ TEST_F(SessionTest, AutosaveAndRecovery) {
     ASSERT_TRUE(recovered.value()->save().ok());
     EXPECT_FALSE(fs::exists(*autosave));  // saving clears the autosave
 }
+
+TEST_F(SessionTest, ThreePointOverwriteUsesMarksAndClearsTimelineMarks) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // a: 0..50 on V1/A1
+    ASSERT_TRUE(session->setMediaMarks(b, 10, 20).ok());
+    ASSERT_TRUE(session->setTimelineMarks(5, std::nullopt).ok());
+    auto r = session->threePointEdit(b, ops::EditMode::Overwrite, 30);
+    ASSERT_TRUE(r.ok()) << r.error().toString();
+    EXPECT_EQ(r.value().recordIn, 5);
+    EXPECT_EQ(r.value().recordOut, 15);
+    ASSERT_EQ(r.value().clipIds.size(), 2u);
+    const Clip* placed = session->timeline().clip(r.value().clipIds[0]);
+    EXPECT_EQ(placed->start, 5);
+    EXPECT_EQ(placed->sourceIn, 10);
+    EXPECT_EQ(placed->duration, 10);
+    EXPECT_EQ(track(0).clips.size(), 3u);  // a split around the overwrite
+    EXPECT_FALSE(session->timeline().markIn.has_value());
+
+    // The whole edit, including clearing the marks, is one undo step.
+    ASSERT_TRUE(session->undo());
+    EXPECT_EQ(track(0).clips.size(), 1u);
+    EXPECT_EQ(session->timeline().markIn, 5);
+}
+
+TEST_F(SessionTest, ThreePointInsertBacktimesAndHonoursTargets) {
+    ASSERT_TRUE(session->appendMedia(a).ok());
+    const std::string v2 = track(1).id;
+    ASSERT_TRUE(session->setTrackTargets(v2, "").ok());  // video to V2, audio disabled
+    ASSERT_TRUE(session->setMediaMarks(b, std::nullopt, 25).ok());
+    ASSERT_TRUE(session->setTimelineMarks(std::nullopt, 40).ok());
+    auto r = session->threePointEdit(b, ops::EditMode::Insert, 0);
+    ASSERT_TRUE(r.ok()) << r.error().toString();
+    EXPECT_EQ(r.value().recordIn, 15);
+    ASSERT_EQ(r.value().clipIds.size(), 1u);  // no audio: target disabled
+    EXPECT_EQ(session->timeline().trackOfClip(r.value().clipIds[0])->id, v2);
+    // Insert rippled the unlocked tracks: a's second half moved right by 25.
+    ASSERT_EQ(track(0).clips.size(), 2u);
+    EXPECT_EQ(track(0).clips[1].start, 40);
+    EXPECT_EQ(track(2).clips[1].start, 40);
+}
+
+TEST_F(SessionTest, ThreePointEditExplainsMissingTargetsAndBadMarks) {
+    ASSERT_TRUE(session->setTrackTargets("", "").ok());
+    auto r = session->threePointEdit(a, ops::EditMode::Overwrite, 0);
+    ASSERT_FALSE(r.ok());
+    EXPECT_NE(r.error().suggestion.find("target"), std::string::npos);
+    EXPECT_FALSE(session->setTrackTargets(track(2).id, "").ok());  // audio track as video target
+    EXPECT_FALSE(session->setMediaMarks(a, 30, 10).ok());
+    EXPECT_FALSE(session->setMediaMarks(a, 0, 500).ok());  // beyond the media
+    EXPECT_FALSE(session->setTimelineMarks(20, 10).ok());
+}
+
+TEST_F(SessionTest, MarksPersistAndUndo) {
+    test::TempDir tmp;
+    ASSERT_TRUE(session->setMediaMarks(a, 3, 17).ok());
+    ASSERT_TRUE(session->setTimelineMarks(2, 9).ok());
+    ASSERT_TRUE(session->saveAs(tmp / "p.uproj").ok());
+    auto reopened = EditorSession::open(tmp / "p.uproj");
+    ASSERT_TRUE(reopened.ok());
+    const auto [in, out] = reopened.value()->mediaMarks(a);
+    EXPECT_EQ(in, 3);
+    EXPECT_EQ(out, 17);
+    EXPECT_EQ(reopened.value()->timeline().markOut, 9);
+    ASSERT_TRUE(reopened.value()->setMediaMarks(a, std::nullopt, std::nullopt).ok());
+    EXPECT_FALSE(reopened.value()->mediaMarks(a).first.has_value());
+    reopened.value()->undo();
+    EXPECT_EQ(reopened.value()->mediaMarks(a).first, 3);
+}
+

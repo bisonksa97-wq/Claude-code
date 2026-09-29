@@ -10,9 +10,31 @@ namespace up {
 ProjectMigrator::ProjectMigrator(int currentVersion) : currentVersion_(currentVersion) {}
 
 const ProjectMigrator& ProjectMigrator::standard() {
-    // Version 1 is the first released format; future steps are registered here, e.g.
-    //   m.addStep(1, [](nlohmann::json& doc) { ...; return Status::success(); });
-    static const ProjectMigrator migrator(Project::kFormatVersion);
+    static const ProjectMigrator migrator = [] {
+        ProjectMigrator m(Project::kFormatVersion);
+        // v1 -> v2: timelines gain record marks and source-patching targets; media gains
+        // source marks. Existing timelines target their first video and audio track,
+        // which matches how v1 placed media.
+        m.addStep(1, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"]) {
+                std::string video, audio;
+                for (const auto& tr : tl.value("tracks", nlohmann::json::array())) {
+                    const std::string kind = tr.value("kind", "");
+                    if (kind == "video" && video.empty()) video = tr.value("id", "");
+                    if (kind == "audio" && audio.empty()) audio = tr.value("id", "");
+                }
+                tl["targets"] = {{"video", video}, {"audio", audio}};
+                tl["markIn"] = nullptr;
+                tl["markOut"] = nullptr;
+            }
+            for (auto& media : doc["media"]) {
+                media["markIn"] = nullptr;
+                media["markOut"] = nullptr;
+            }
+            return Status::success();
+        });
+        return m;
+    }();
     return migrator;
 }
 

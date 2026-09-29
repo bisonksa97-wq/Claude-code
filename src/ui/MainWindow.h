@@ -4,7 +4,12 @@
 #include <functional>
 #include <memory>
 
+#include <optional>
+#include <string>
+
+#include "core/Rational.h"
 #include "core/Result.h"
+#include "timeline/EditOperations.h"
 
 class QAction;
 class QTimer;
@@ -12,6 +17,7 @@ class QTimer;
 namespace up {
 class EditorSession;
 class MediaAssets;
+class Project;
 }  // namespace up
 
 namespace up::ui {
@@ -32,7 +38,14 @@ public:
 
     EditorSession* session() const { return session_.get(); }
     MediaPoolPanel* mediaPool() const { return mediaPool_; }
-    ViewerPanel* viewer() const { return viewer_; }
+    ViewerPanel* viewer() const { return viewer_; }  // program monitor
+    ViewerPanel* sourceViewer() const { return sourceViewer_; }
+    ViewerPanel* activeViewer() const { return activeViewer_; }
+    // Opens a media item in the source monitor.
+    bool loadSource(const QString& mediaId);
+    // Insert/overwrite the source monitor's clip into the timeline (three-point edit).
+    bool threePointEdit(ops::EditMode mode);
+    void setActiveViewer(ViewerPanel* viewer);
     TimelineView* timeline() const;
     MediaAssets* assets() const { return assets_.get(); }
 
@@ -61,6 +74,11 @@ private:
     void exportTimeline();
     void autosave();
     void clearMediaCache();
+    void clearSource();
+    void syncSourceAndMarks();
+    void markIn(ViewerPanel* viewer, FrameIndex frame);
+    void markOut(ViewerPanel* viewer, FrameIndex frame);
+    void clearMarks(ViewerPanel* viewer);
 
     // Edit commands operating on the selected clip / playhead.
     void razor();
@@ -76,6 +94,10 @@ private:
     QTimer* assetRefresh_ = nullptr;
     MediaPoolPanel* mediaPool_ = nullptr;
     ViewerPanel* viewer_ = nullptr;
+    ViewerPanel* sourceViewer_ = nullptr;
+    ViewerPanel* activeViewer_ = nullptr;
+    std::unique_ptr<Project> sourceProject_;  // one-clip project shown by the source monitor
+    std::string sourceMediaId_;
     TimelinePanel* timelinePanel_ = nullptr;
     QTimer* autosaveTimer_ = nullptr;
     QAction* undoAction_ = nullptr;

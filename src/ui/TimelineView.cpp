@@ -190,11 +190,28 @@ QRect TimelineView::toggleRect(int row, int index) const {
     return QRect(x, rowTop(row) + m.trackHeight - size - 6, size, size);
 }
 
+QRect TimelineView::targetRect(int row) const {
+    const auto m = metricsFor(this);
+    const int size = m.trackHeight / 3;
+    return QRect(4, rowTop(row) + m.trackHeight - size - 6, size + 4, size);
+}
+
 bool TimelineView::handleHeaderClick(const QPoint& pos) {
     const int row = rowAt(pos.y());
     if (row < 0 || !session_) return false;
     const std::string trackId = rowTrackIds()[static_cast<std::size_t>(row)];
     const Track* track = session_->timeline().track(trackId);
+    if (targetRect(row).contains(pos)) {
+        // Toggle source patching: target this track, or disable the stream if it already is.
+        const Timeline& tl = session_->timeline();
+        std::string video = tl.videoTarget;
+        std::string audio = tl.audioTarget;
+        std::string& target = track->kind == TrackKind::Video ? video : audio;
+        target = target == trackId ? std::string() : trackId;
+        Status st = session_->setTrackTargets(video, audio);
+        if (!st.ok()) report(errorText(st.error()));
+        return true;
+    }
     TrackState s{track->enabled, track->locked, track->muted, track->solo, track->gainDb};
     // Toggle order from the right edge: lock, enable/mute, solo (audio only).
     if (toggleRect(row, 0).contains(pos)) s.locked = !s.locked;
@@ -379,6 +396,14 @@ void TimelineView::drawTrackHeader(QPainter& p, const Track& track, int row) con
         toggles.push_back({"M", track.muted});
         toggles.push_back({"S", track.solo});
     }
+    // Source patch box.
+    const Timeline& tl = session_->timeline();
+    const bool targeted = track.id == (track.kind == TrackKind::Video ? tl.videoTarget : tl.audioTarget);
+    const QRect tr = targetRect(row);
+    p.fillRect(tr, targeted ? t.accent : t.panel);
+    p.setPen(targeted ? t.accentText : t.textMuted);
+    p.drawRect(tr.adjusted(0, 0, -1, -1));
+    p.drawText(tr, Qt::AlignCenter, track.kind == TrackKind::Video ? "V" : "A");
     for (std::size_t i = 0; i < toggles.size(); ++i) {
         const QRect r = toggleRect(row, static_cast<int>(i));
         p.fillRect(r, toggles[i].on ? t.toggleOn : t.panel);
@@ -495,6 +520,22 @@ void TimelineView::paintEvent(QPaintEvent*) {
         }
         p.setClipping(false);
         drawTrackHeader(p, track, static_cast<int>(row));
+    }
+
+    // Timeline in/out range (three-point editing).
+    if (tl.markIn || tl.markOut) {
+        const int x0 = std::max(m.trackHeaderWidth, xForFrame(tl.markIn.value_or(0)));
+        const int x1 = tl.markOut ? xForFrame(*tl.markOut) : width();
+        if (x1 > x0) {
+            QColor shade = t.accent;
+            shade.setAlpha(45);
+            p.fillRect(QRect(x0, 0, x1 - x0, height()), shade);
+            shade.setAlpha(200);
+            p.fillRect(QRect(x0, m.rulerHeight - 4, x1 - x0, 4), shade);
+            p.setPen(t.accent);
+            if (tl.markIn && x0 > m.trackHeaderWidth) p.drawLine(x0, 0, x0, height());
+            if (tl.markOut) p.drawLine(x1, 0, x1, height());
+        }
     }
 
     // Drag previews.

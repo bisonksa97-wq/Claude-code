@@ -97,6 +97,64 @@ TEST(ProjectFormat, RejectsStructurallyInvalidTimelines) {
     ASSERT_FALSE(r.ok());
 }
 
+TEST(ProjectFormat, RoundTripsMarksAndTargets) {
+    Project p = sampleProject();
+    p.media[0].markIn = 1.5;
+    p.media[0].markOut = 3.25;
+    p.timelines[0].markIn = 12;
+    p.timelines[0].markOut = 48;
+    p.timelines[0].audioTarget = p.timelines[0].tracks[3].id;  // A2
+    auto q = ProjectSerializer::fromJson(ProjectSerializer::toJson(p));
+    ASSERT_TRUE(q.ok()) << q.error().toString();
+    EXPECT_EQ(q.value().media[0].markIn, 1.5);
+    EXPECT_EQ(q.value().media[0].markOut, 3.25);
+    EXPECT_EQ(q.value().timelines[0].markIn, 12);
+    EXPECT_EQ(q.value().timelines[0].markOut, 48);
+    EXPECT_EQ(q.value().timelines[0].videoTarget, p.timelines[0].tracks[0].id);
+    EXPECT_EQ(q.value().timelines[0].audioTarget, p.timelines[0].tracks[3].id);
+
+    p.timelines[0].markIn.reset();
+    p.timelines[0].videoTarget.clear();  // a disabled target survives the round trip
+    q = ProjectSerializer::fromJson(ProjectSerializer::toJson(p));
+    ASSERT_TRUE(q.ok());
+    EXPECT_FALSE(q.value().timelines[0].markIn.has_value());
+    EXPECT_TRUE(q.value().timelines[0].videoTarget.empty());
+}
+
+TEST(ProjectFormat, RejectsTargetsOfTheWrongKind) {
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["timelines"][0]["targets"]["video"] = doc["timelines"][0]["tracks"][2]["id"];  // an audio track
+    EXPECT_FALSE(ProjectSerializer::fromJson(doc.dump()).ok());
+}
+
+// A document exactly as format version 1 wrote it (no marks, no targets).
+TEST(ProjectFormat, MigratesVersion1Documents) {
+    const char* v1 = R"({
+      "format": "ultimatepost.project", "formatVersion": 1,
+      "project": {"id": "p1", "name": "Old", "createdAt": "", "modifiedAt": "",
+                  "settings": {"frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000},
+                  "activeTimelineId": "t1"},
+      "bins": [{"id": "b1", "name": "Master", "parentId": ""}],
+      "media": [{"id": "m1", "name": "a.mov", "path": "/a.mov", "relativePath": "", "binId": "b1",
+                 "info": {"hasVideo": true, "frameRate": "25/1", "durationSeconds": 4.0},
+                 "rating": 0, "keywords": [], "comment": "", "importedAt": ""}],
+      "timelines": [{"id": "t1", "name": "Timeline 1", "frameRate": "25/1", "width": 1920, "height": 1080,
+                     "sampleRate": 48000, "tracks": [
+                       {"id": "a1", "kind": "audio", "name": "A1", "clips": []},
+                       {"id": "v1", "kind": "video", "name": "V1", "clips": []},
+                       {"id": "v2", "kind": "video", "name": "V2", "clips": []}]}]
+    })";
+    auto p = ProjectSerializer::fromJson(v1);
+    ASSERT_TRUE(p.ok()) << p.error().toString();
+    const Timeline& t = p.value().timelines[0];
+    EXPECT_EQ(t.videoTarget, "v1");  // first track of each kind
+    EXPECT_EQ(t.audioTarget, "a1");
+    EXPECT_FALSE(t.markIn.has_value());
+    EXPECT_FALSE(p.value().media[0].markIn.has_value());
+    // Saving writes the current version.
+    EXPECT_EQ(nlohmann::json::parse(ProjectSerializer::toJson(p.value()))["formatVersion"], Project::kFormatVersion);
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

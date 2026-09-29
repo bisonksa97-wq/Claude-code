@@ -15,6 +15,7 @@ up_add_test(unit_tests
     unit/CacheJobsTest.cpp
     unit/CoreTest.cpp
     unit/CommandStackTest.cpp
+    unit/ThreePointEditTest.cpp
     unit/TimelineOpsTest.cpp
     unit/ProjectFormatTest.cpp)
 
