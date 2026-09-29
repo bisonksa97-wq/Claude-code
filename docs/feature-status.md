@@ -1,0 +1,68 @@
+# Feature status
+
+Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
+A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
+
+_Last updated: session 1._
+
+## First vertical slice (§90)
+
+| Step | Status | Where / how verified |
+|---|---|---|
+| Create project | IMPLEMENTED | File ▸ New, `ultimatepost new`; SessionTest |
+| Import video | IMPLEMENTED | File ▸ Import, Media Pool button, `ultimatepost import`; SessionTest |
+| Show media | IMPLEMENTED | Media Pool (name, duration, format, online state, search); UI test |
+| Drag video to timeline | IMPLEMENTED | Drag from Media Pool; overwrite by default, Ctrl = insert; UI test |
+| Play video | PARTIAL | Real-time video playback in the viewer, dropping frames when rendering can't keep up. **No audio monitoring during playback yet.** |
+| Cut clip | IMPLEMENTED | Razor at playhead (Ctrl+K), `ultimatepost razor`; ops, session and UI tests |
+| Trim clip | IMPLEMENTED | Drag clip edges (Shift = ripple), `[`/`]` keys, `ultimatepost trim`; tests |
+| Add second clip | IMPLEMENTED | Drag/append; tests |
+| Add audio | IMPLEMENTED | Audio-only media goes on audio tracks; mixed on export; VerticalSliceTest |
+| Save project | IMPLEMENTED | Atomic save with backup; tests |
+| Reopen project | IMPLEMENTED | Round-trip is byte-identical; offline detection; tests |
+| Export video | IMPLEMENTED | File ▸ Export (background, progress, cancel), `ultimatepost export`; output decoded and verified in tests |
+
+## Capability matrix (§1)
+
+| # | Capability | Status | Notes |
+|---|---|---|---|
+| 1 | Media management | PARTIAL | Import, probe metadata, search, offline detection, relink/replace. Bins exist in the model (one "Master" bin); there is no bin UI, ratings/keywords UI, thumbnails or waveforms yet. |
+| 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
+| 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims. No Cut workspace. |
+| 4 | Multicam | NOT IMPLEMENTED | |
+| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Missing: in/out points, markers, track targeting UI, adding/removing tracks in the UI. |
+| 6 | Text-based editing | NOT IMPLEMENTED | |
+| 7–15 | Motion graphics, 2D/3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
+| 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
+| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; stereo mix on export. No pan, EQ, dynamics, automation or buses. |
+| 21–22 | ADR, Foley | NOT IMPLEMENTED | |
+| 23 | Captions/subtitles | NOT IMPLEMENTED | |
+| 24–30 | AI search, masking, tracking, enhancement, audio AI, generative video/audio | NOT IMPLEMENTED | No AI provider abstraction yet (planned for Phase 10). |
+| 31 | Photo/RAW editing | NOT IMPLEMENTED | Still images import as unbounded clips, but have not been tested. |
+| 32–33 | VR/360, stereoscopic | NOT IMPLEMENTED | |
+| 34 | Professional export | PARTIAL | H.264/AAC (MP4/MOV/MKV) with CRF; encoder choosable via CLI `--codec`; fallback to MPEG-4 Part 2. No presets, ProRes/DNx profiles or export dialog settings. |
+| 35–38 | Broadcast, cinema, DCP, IMF | NOT IMPLEMENTED | |
+| 39–41 | Cloud collaboration, review/approval, version control | NOT IMPLEMENTED | |
+| 42 | Plugin support | NOT IMPLEMENTED | |
+| 43 | Python/Lua/JS automation | NOT IMPLEMENTED | The `EditorSession` service layer is the planned binding surface. |
+| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice (see README). No `transcode/proxy/analyze/transcribe/archive` yet. |
+| 45–46 | GPU / hardware acceleration | NOT IMPLEMENTED | CPU reference pipeline only; FFmpeg decoder frame threading is enabled. |
+| 47 | Proxy workflows | NOT IMPLEMENTED | |
+| 48 | Render caching | NOT IMPLEMENTED | |
+| 49 | Professional QC | NOT IMPLEMENTED | Offline media is detected and reported (export warns, renders an offline colour). |
+| 50 | Project archiving | NOT IMPLEMENTED | |
+
+## Cross-cutting requirements
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Undo/redo (§16) | IMPLEMENTED | Command stack with groups/transactions, configurable limit, clean-state tracking. Timeline edits use exact snapshots. |
+| Autosave / crash recovery (§74) | IMPLEMENTED | Periodic autosave (setting `autosave/intervalSeconds`, default 120), recovery prompts on open and at startup, transactional writes. No crash-report capture yet. |
+| Versioned format + migrations (§8) | IMPLEMENTED | Framework and tests; no real migration exists yet because v1 is the first format. |
+| Human-readable errors (§76) | IMPLEMENTED | Error id, message, suggestion, technical details; copyable in UI dialogs. |
+| Logging (§77) | IMPLEMENTED | Per-subsystem levels; log file in the app-data folder. |
+| Themes / design tokens (§69) | IMPLEMENTED | Dark, light, high contrast. |
+| Dockable/floating panels (§68) | PARTIAL | Qt docks can float onto other monitors. Workspace layouts are not saved yet. |
+| Accessibility (§70) | PARTIAL | Keyboard shortcuts for all edit/transport actions, accessible names, font-scaled metrics. Shortcut remapping is not available. |
+| Performance monitor (§75) | NOT IMPLEMENTED | The viewer counts dropped frames internally; no panel yet. |
+| Security (§71) | NOT IMPLEMENTED | Nothing network-facing exists yet. |
