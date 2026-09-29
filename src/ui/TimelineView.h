@@ -12,8 +12,12 @@ class QScrollBar;
 
 namespace up {
 class EditorSession;
+class MediaAssets;
 struct Clip;
 struct Track;
+namespace media {
+struct WaveformPeaks;
+}
 }  // namespace up
 
 namespace up::ui {
@@ -29,6 +33,11 @@ public:
     explicit TimelineView(QWidget* parent = nullptr);
 
     void setSession(EditorSession* session);
+    // Source of clip thumbnails and audio waveforms (may be null).
+    void setAssets(MediaAssets* assets) {
+        assets_ = assets;
+        update();
+    }
     FrameIndex playhead() const { return playhead_; }
     QString selectedClipId() const { return QString::fromStdString(selected_); }
     void selectClip(const QString& clipId);
@@ -87,9 +96,11 @@ private:
     void report(const QString& message);
     void drawTrackHeader(QPainter& p, const Track& track, int row) const;
     void drawClip(QPainter& p, const Clip& clip, const QRect& r, bool isVideo) const;
+    void drawWaveform(QPainter& p, const Clip& clip, const QRect& r, const media::WaveformPeaks& peaks) const;
     QRect toggleRect(int row, int index) const;
 
     EditorSession* session_ = nullptr;
+    MediaAssets* assets_ = nullptr;
     FrameIndex playhead_ = 0;
     FrameIndex scroll_ = 0;
     double pixelsPerFrame_ = 4.0;

@@ -12,6 +12,7 @@ function(up_add_test name)
 endfunction()
 
 up_add_test(unit_tests
+    unit/CacheJobsTest.cpp
     unit/CoreTest.cpp
     unit/CommandStackTest.cpp
     unit/TimelineOpsTest.cpp
@@ -19,6 +20,7 @@ up_add_test(unit_tests
 
 up_add_test(integration_tests
     integration/CodecTest.cpp
+    integration/MediaAssetsTest.cpp
     integration/PlaybackTest.cpp
     integration/SessionTest.cpp
     integration/VerticalSliceTest.cpp)

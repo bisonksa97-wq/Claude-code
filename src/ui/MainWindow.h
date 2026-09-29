@@ -11,7 +11,8 @@ class QTimer;
 
 namespace up {
 class EditorSession;
-}
+class MediaAssets;
+}  // namespace up
 
 namespace up::ui {
 
@@ -33,6 +34,7 @@ public:
     MediaPoolPanel* mediaPool() const { return mediaPool_; }
     ViewerPanel* viewer() const { return viewer_; }
     TimelineView* timeline() const;
+    MediaAssets* assets() const { return assets_.get(); }
 
     // Replaces the current session (no save prompt). Used by open/new and tests.
     void setSession(std::unique_ptr<EditorSession> session);
@@ -58,6 +60,7 @@ private:
     void relinkMedia(const QString& mediaId);
     void exportTimeline();
     void autosave();
+    void clearMediaCache();
 
     // Edit commands operating on the selected clip / playhead.
     void razor();
@@ -69,6 +72,8 @@ private:
     QString selectedClipOrWarn();
 
     std::unique_ptr<EditorSession> session_;
+    std::unique_ptr<MediaAssets> assets_;
+    QTimer* assetRefresh_ = nullptr;
     MediaPoolPanel* mediaPool_ = nullptr;
     ViewerPanel* viewer_ = nullptr;
     TimelinePanel* timelinePanel_ = nullptr;

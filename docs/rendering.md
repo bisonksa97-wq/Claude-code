@@ -28,6 +28,14 @@ PlaybackEngine ─┤                                                           
 - **Audio underruns** (the device pulling from an empty buffer before the end) are counted. The start of playback is primed with 150 ms of audio.
 - `QtAudioOutput` (UI layer) implements `AudioOutput` with `QAudioSink` in pull mode: float32, falling back to int16, with an ~80 ms device buffer. Played position = frames pulled − device buffer size, which is an estimate. Hardware latency beyond the Qt buffer is not compensated yet.
 
+## Derived media: thumbnails and waveforms
+
+- **Thumbnail:** a poster frame at 10% of the duration (max 5 s; frame 0 for stills), fitted inside 192×108 and stored as binary PPM.
+- **Waveform:** a min/max envelope of all channels, with 480 samples per peak at 48 kHz (100 peaks/s). It covers the probed duration, so silent passages are kept, and is stored as `UPWF` v1 binary (header + int16 pairs). The timeline draws one line per pixel column from the peaks under that column.
+- **Cache keys:** kind + format version + file fingerprint (absolute path, size, mtime) + parameters, hashed with FNV-1a into `<cache>/<2 hex>/<16 hex><ext>.upc`. A changed or relinked file therefore never reuses stale assets. Unchanged files are never regenerated across app restarts.
+- **Safety:** the cache holds only regeneratable data. Writes are atomic. Damaged entries are detected on decode and regenerated. `clear()` only removes `*.upc` files. The default limit is 2 GB with LRU eviction.
+- **Location:** the per-user cache folder (`$XDG_CACHE_HOME/UltimatePost`, `~/Library/Caches/UltimatePost`, or `%LOCALAPPDATA%\UltimatePost\Cache`). The desktop app honours the `cache/directory` setting, and the CLI takes `--cache-dir`.
+
 ## Determinism
 
 For identical inputs and settings, compositing and mixing are deterministic. Encoders may vary across FFmpeg versions, so golden tests compare **decoded content with tolerances** (average colour per edit, audio RMS per region), not bytes.

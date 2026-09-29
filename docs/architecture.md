@@ -8,13 +8,15 @@ Dependencies only point downward.
 | Module | Target | Responsibility | Depends on |
 |---|---|---|---|
 | core | `up_core` | `Result`/`Error`, logging, `Rational`/timecode, `Command`/`CommandStack`, atomic file IO, ids, `MediaInfo` | – |
+| cache | `up_cache` | `DiskCache`: content-addressed, size-limited, LRU-evicting store for regeneratable derived data | core |
+| jobs | `up_jobs` | `JobQueue`: prioritised background jobs with cooperative cancellation (`CancelToken`) | core |
 | timeline | `up_timeline` | Timeline/track/clip data model and deterministic edit operations | core |
 | project | `up_project` | Project model (media pool, bins, timelines), `.uproj` serializer and migrations | core, timeline |
 | codec | `up_codec` | FFmpeg wrappers: probe, `VideoDecoder`, `AudioDecoder`, `MediaWriter` | core, FFmpeg |
-| media | `up_media` | Import, offline detection, relink validation, search, synthetic test media | core, project, codec |
+| media | `up_media` | Import, offline detection, relink validation, search, synthetic test media, thumbnail/waveform generators and formats | core, project, codec |
 | render | `up_render` | `FrameCompositor`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
 | playback | `up_playback` | `PlaybackEngine` (real-time A/V playback), `AudioOutput`/`Clock` interfaces, `SampleFifo` | core, project, render |
-| app | `up_app` | `EditorSession` application services and undoable project commands | all of the above |
+| app | `up_app` | `EditorSession` application services and undoable project commands; `MediaAssets` (async thumbnails and waveforms) | all of the above |
 | cli | `ultimatepost` | Command-line front end | app |
 | ui | `up_ui`, `ultimatepost-studio` | Qt Widgets front end; `QtAudioOutput` adapter (Qt Multimedia, optional) | app, playback, Qt 6 |
 
@@ -36,6 +38,7 @@ The rest are listed in [roadmap.md](roadmap.md).
 - The model (`Project`, `Timeline`) is owned by the UI thread and is not thread-safe.
 - `ExportJob` receives a **copy** of the project, so export runs on a worker thread while editing continues.
 - Decoders are single-threaded objects. Each `FrameCompositor`/`AudioMixer` owns its own `DecoderPool`. The viewer, playback and export never share decoders.
+- `MediaAssets` runs thumbnail and waveform generation on a `JobQueue` (2 workers; thumbnails have higher priority). Lookups never block: they return the ready result or schedule a job and return nothing. The UI is told through a listener that it marshals to the UI thread and coalesces with a 50 ms timer.
 - `PlaybackEngine` also works on a project **copy**. It runs an audio worker (mixes ahead into a 500 ms `SampleFifo` that the device pulls from) and a video worker (renders up to 6 frames ahead at preview size). The UI thread only polls `frameForDisplay()` and `position()`. Edits during playback restart the engine from the current frame with a fresh snapshot.
 - Playback threads were checked with ThreadSanitizer. The only reports are inside uninstrumented FFmpeg and Qt thread pools, with none in Ultimate Post code.
 - FFmpeg's internal frame threading is enabled in the video decoder.

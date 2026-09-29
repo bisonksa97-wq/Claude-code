@@ -19,6 +19,7 @@
 #include <thread>
 
 #include "app/EditorSession.h"
+#include "app/MediaAssets.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
 #include "ui/MediaPoolPanel.h"
@@ -72,12 +73,45 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     const int interval = QSettings().value("autosave/intervalSeconds", 120).toInt();
     if (interval > 0) autosaveTimer_->start(interval * 1000);
 
+    // Thumbnails and waveforms are generated in the background into a regeneratable cache.
+    const QString cacheDir = QSettings()
+                                 .value("cache/directory", QString::fromStdString(DiskCache::defaultDirectory().string()))
+                                 .toString();
+    assets_ = std::make_unique<MediaAssets>(cacheDir.toStdString());
+    assetRefresh_ = new QTimer(this);
+    assetRefresh_->setSingleShot(true);
+    assetRefresh_->setInterval(50);  // coalesce bursts of finished jobs into one repaint
+    connect(assetRefresh_, &QTimer::timeout, this, [this] {
+        mediaPool_->updateThumbnails();
+        timeline()->update();
+    });
+    assets_->setListener([this](const std::string&, MediaAssets::Kind) {
+        QMetaObject::invokeMethod(assetRefresh_, qOverload<>(&QTimer::start), Qt::QueuedConnection);
+    });
+    mediaPool_->setAssets(assets_.get());
+    timeline()->setAssets(assets_.get());
+
     resize(1400, 900);
     setSession(EditorSession::createNew("Untitled"));
     if (checkRecovery) QTimer::singleShot(0, this, &MainWindow::offerStartupRecovery);
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // Stop background asset jobs before any widget they notify is destroyed.
+    assets_->setListener({});
+    assets_.reset();
+}
+
+void MainWindow::clearMediaCache() {
+    Status s = assets_->clearCache();
+    if (!s.ok()) {
+        showError(tr("The media cache could not be cleared."), qs(s.error().toString()));
+        return;
+    }
+    mediaPool_->refresh();  // regenerates thumbnails on demand
+    timeline()->update();
+    statusBar()->showMessage(tr("Media cache cleared; thumbnails and waveforms will be regenerated."), 5000);
+}
 
 TimelineView* MainWindow::timeline() const { return timelinePanel_->view(); }
 
@@ -85,12 +119,14 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
     viewer_->stop();
     session_ = std::move(session);
     session_->setChangeListener([this] {
+        assets_->prefetch(session_->project());
         mediaPool_->refresh();
         timeline()->update();
         timeline()->viewChanged();
         viewer_->refresh();
         updateTitleAndActions();
     });
+    assets_->prefetch(session_->project());
     mediaPool_->setSession(session_.get());
     timeline()->setSession(session_.get());
     viewer_->setSession(session_.get());
@@ -126,6 +162,7 @@ void MainWindow::buildMenus() {
     add(file, tr("Save &As…"), QKeySequence::SaveAs, &MainWindow::saveAs);
     file->addSeparator();
     add(file, tr("&Import Media…"), QKeySequence("Ctrl+I"), &MainWindow::importMedia);
+    add(file, tr("Clear Media Cache"), QKeySequence(), &MainWindow::clearMediaCache);
     add(file, tr("&Export Timeline…"), QKeySequence("Ctrl+M"), &MainWindow::exportTimeline);
     file->addSeparator();
     add(file, tr("&Quit"), QKeySequence::Quit, &QWidget::close);

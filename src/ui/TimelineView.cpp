@@ -11,7 +11,9 @@
 #include <cmath>
 
 #include "app/EditorSession.h"
+#include "app/MediaAssets.h"
 #include "core/Timecode.h"
+#include "ui/FrameImage.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
 
@@ -392,17 +394,55 @@ void TimelineView::drawClip(QPainter& p, const Clip& clip, const QRect& r, bool 
     QColor fill = !media || !media->online ? t.offline : (isVideo ? t.videoClip : t.audioClip);
     if (!clip.enabled) fill = fill.darker(180);
     p.fillRect(r, fill);
+    int labelLeft = r.left() + 5;
+    if (assets_ && media && media->online) {
+        if (isVideo) {
+            // Poster frame at the head of the clip, when there is room for it.
+            if (auto thumb = assets_->thumbnail(*media)) {
+                const QRect area = r.adjusted(1, 1, -1, -1);
+                const QSize size = QSize(thumb->width, thumb->height).scaled(QSize(area.width() / 2, area.height()), Qt::KeepAspectRatio);
+                if (size.width() >= 16) {
+                    p.drawImage(QRect(area.topLeft(), size), toQImage(*thumb));
+                    labelLeft = area.left() + size.width() + 4;
+                }
+            }
+        } else if (auto peaks = assets_->waveform(*media)) {
+            drawWaveform(p, clip, r, *peaks);
+        }
+    }
     const bool selected = clip.id == selected_ ||
                           (!selected_.empty() && !clip.linkId.empty() && session_->timeline().clip(selected_) &&
                            session_->timeline().clip(selected_)->linkId == clip.linkId);
     p.setPen(QPen(selected ? t.selection : fill.darker(150), selected ? 2 : 1));
     p.drawRect(r.adjusted(0, 0, -1, -1));
-    if (r.width() > 20) {
+    if (r.right() - labelLeft > 16) {
         p.setPen(t.clipText);
         QString label = QString::fromStdString(clip.name);
         if (!media || !media->online) label = tr("OFFLINE — %1").arg(label);
-        p.drawText(r.adjusted(5, 3, -3, -3), Qt::AlignLeft | Qt::AlignTop,
-                   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 8));
+        const QRect textRect(labelLeft, r.top() + 3, r.right() - labelLeft - 3, r.height() - 6);
+        p.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, p.fontMetrics().elidedText(label, Qt::ElideRight, textRect.width()));
+    }
+}
+
+void TimelineView::drawWaveform(QPainter& p, const Clip& clip, const QRect& r, const media::WaveformPeaks& peaks) const {
+    const auto& t = currentTokens();
+    const double fps = session_->timeline().frameRate.toDouble();
+    const QRect area = r.adjusted(1, p.fontMetrics().height() + 2, -1, -2);
+    if (area.height() < 4) return;
+    const int mid = area.center().y();
+    const double half = area.height() / 2.0;
+    QColor color = t.clipText;
+    color.setAlpha(150);
+    p.setPen(color);
+    // One vertical line per pixel column, covering the source time under that column.
+    const int x0 = std::max(area.left(), metricsFor(this).trackHeaderWidth);
+    const int x1 = std::min(area.right(), width());
+    for (int x = x0; x <= x1; ++x) {
+        const double srcFrame = static_cast<double>(clip.sourceIn) + (x - r.left()) / pixelsPerFrame_;
+        const auto [lo, hi] = peaks.range(srcFrame / fps, (srcFrame + 1.0 / pixelsPerFrame_) / fps);
+        const int top = mid - static_cast<int>(std::lround(hi * half));
+        const int bottom = mid - static_cast<int>(std::lround(lo * half));
+        p.drawLine(x, top, x, std::max(top, bottom));
     }
 }
 

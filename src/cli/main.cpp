@@ -8,7 +8,10 @@
 #include <map>
 #include <sstream>
 
+#include <thread>
+
 #include "app/EditorSession.h"
+#include "app/MediaAssets.h"
 #include "cli/Args.h"
 #include "codec/MediaProbe.h"
 #include "codec/MediaWriter.h"
@@ -147,6 +150,11 @@ Editing (positions/deltas accept frames or HH:MM:SS:FF; clips accept ids or TRAC
 Rendering
   export <project> <output.mp4> [--codec libx264] [--crf 18] [--no-audio] [--from <pos>] [--to <pos>]
   render-frame <project> <pos> <output.ppm>
+
+Media analysis and cache (default cache: per-user cache folder; override with --cache-dir)
+  analyze <project> [--cache-dir DIR]     generate thumbnails and waveforms for all online media
+  cache-info [--cache-dir DIR]
+  cache-clear [--cache-dir DIR]           delete derived data (it is regenerated on demand)
 
 Media utilities
   probe <file>
@@ -356,6 +364,60 @@ int main(int argc, char** argv) {
             out.write(reinterpret_cast<const char*>(&frame.value().pixels[i]), 3);
         if (!out) return fail(makeError(ErrorCode::IoError, "cli", "Unable to write " + pos[2]));
         std::cout << "Wrote " << pos[2] << "\n";
+        return 0;
+    }};
+
+    auto cacheDir = [](const cli::Args& a) -> fs::path {
+        if (auto d = a.option("cache-dir")) return *d;
+        return DiskCache::defaultDirectory();
+    };
+
+    commands["analyze"] = {1, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        const Project& project = s.value()->project();
+        MediaAssets assets(cacheDir(a), static_cast<int>(std::max(1u, std::thread::hardware_concurrency() / 2)));
+        assets.prefetch(project);
+        assets.waitIdle();
+        int ready = 0;
+        int expected = 0;
+        for (const auto& m : project.media) {
+            std::cout << (m.online ? "  " : "! ") << m.name << ":";
+            if (!m.online) {
+                std::cout << " offline, skipped\n";
+                continue;
+            }
+            if (m.info.hasVideo) {
+                ++expected;
+                const bool ok = assets.thumbnail(m) != nullptr;
+                ready += ok;
+                std::cout << " thumbnail " << (ok ? "ok" : "FAILED");
+            }
+            if (m.info.hasAudio) {
+                ++expected;
+                const auto wave = assets.waveform(m);
+                ready += wave != nullptr;
+                std::cout << " waveform " << (wave ? std::to_string(wave->peakCount()) + " peaks" : std::string("FAILED"));
+            }
+            std::cout << "\n";
+        }
+        std::cout << ready << "/" << expected << " assets ready in " << assets.cache().root().string() << "\n";
+        return ready == expected ? 0 : 1;
+    }};
+
+    commands["cache-info"] = {0, [&](const cli::Args& a) {
+        DiskCache cache(cacheDir(a));
+        std::cout << "location=" << cache.root().string() << "\nentries=" << cache.entryCount()
+                  << "\nbytes=" << cache.sizeBytes() << "\nlimit=" << cache.maxBytes() << "\n";
+        return 0;
+    }};
+
+    commands["cache-clear"] = {0, [&](const cli::Args& a) {
+        DiskCache cache(cacheDir(a));
+        const std::size_t n = cache.entryCount();
+        Status st = cache.clear();
+        if (!st.ok()) return fail(st.error());
+        std::cout << "Removed " << n << " cache entries from " << cache.root().string() << "\n";
         return 0;
     }};
 

@@ -8,7 +8,10 @@
 #include <QMimeData>
 #include <QTest>
 
+#include <QTemporaryDir>
+
 #include "app/EditorSession.h"
+#include "app/MediaAssets.h"
 #include "playback/AudioOutput.h"
 #include "support/TestSupport.h"
 #include "ui/MainWindow.h"
@@ -56,6 +59,9 @@ TEST(Ui, EditWorkflowThroughWidgets) {
     window.show();
     QApplication::processEvents();
     EXPECT_EQ(window.mediaPool()->itemCount(), 2);
+    // Thumbnails are generated in the background and appear without further interaction.
+    window.assets()->waitIdle();
+    EXPECT_TRUE(QTest::qWaitFor([&] { return window.mediaPool()->thumbnailCount() == 2; }, 3000));
 
     ui::TimelineView* tv = window.timeline();
     tv->setPixelsPerFrame(8.0);
@@ -222,6 +228,10 @@ TEST(Ui, ThemesUseCentralTokens) {
 int main(int argc, char** argv) {
     // UI tests are headless by default (CI, test discovery); set QT_QPA_PLATFORM to override.
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Keep the media cache of test runs out of the user's real cache folder.
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    qputenv("LOCALAPPDATA", cacheHome.path().toUtf8());
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 2._
+_Last updated: session 3._
 
 ## First vertical slice (§90)
 
@@ -26,7 +26,7 @@ _Last updated: session 2._
 
 | # | Capability | Status | Notes |
 |---|---|---|---|
-| 1 | Media management | PARTIAL | Import, probe metadata, search, offline detection, relink/replace. Bins exist in the model (one "Master" bin); there is no bin UI, ratings/keywords UI, thumbnails or waveforms yet. |
+| 1 | Media management | PARTIAL | Import, probe metadata, search, offline detection, relink/replace. **Thumbnails** in the media pool (small/large toggle) and on video clips, **waveforms** on audio clips, generated in the background and cached. Bins exist in the model (one "Master" bin); there is no bin UI, ratings/keywords UI, filmstrip view or hover scrub. |
 | 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
 | 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims. No Cut workspace. |
 | 4 | Multicam | NOT IMPLEMENTED | |
@@ -45,10 +45,10 @@ _Last updated: session 2._
 | 39–41 | Cloud collaboration, review/approval, version control | NOT IMPLEMENTED | |
 | 42 | Plugin support | NOT IMPLEMENTED | |
 | 43 | Python/Lua/JS automation | NOT IMPLEMENTED | The `EditorSession` service layer is the planned binding surface. |
-| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice (see README). No `transcode/proxy/analyze/transcribe/archive` yet. |
+| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice, plus `analyze`, `cache-info` and `cache-clear`. No `transcode/proxy/transcribe/archive` yet. |
 | 45–46 | GPU / hardware acceleration | NOT IMPLEMENTED | CPU reference pipeline only; FFmpeg decoder frame threading is enabled. |
 | 47 | Proxy workflows | NOT IMPLEMENTED | |
-| 48 | Render caching | NOT IMPLEMENTED | |
+| 48 | Render caching | PARTIAL | The cache engine (§57) exists and holds the thumbnail and waveform caches. There is no playback, effect or render cache yet. |
 | 49 | Professional QC | NOT IMPLEMENTED | Offline media is detected and reported (export warns, renders an offline colour). |
 | 50 | Project archiving | NOT IMPLEMENTED | |
 
@@ -64,5 +64,6 @@ _Last updated: session 2._
 | Themes / design tokens (§69) | IMPLEMENTED | Dark, light, high contrast. |
 | Dockable/floating panels (§68) | PARTIAL | Qt docks can float onto other monitors. Workspace layouts are not saved yet. |
 | Accessibility (§70) | PARTIAL | Keyboard shortcuts for all edit/transport actions, accessible names, font-scaled metrics. Shortcut remapping is not available. |
+| Background jobs | IMPLEMENTED | `JobQueue` with priorities, cancellation, status history and completion listeners. Used for media analysis; export still uses its own thread. |
 | Performance monitor (§75) | PARTIAL | The viewer shows the clock source and dropped frames during playback. The engine also counts audio underruns. There is no dedicated panel. |
 | Security (§71) | NOT IMPLEMENTED | Nothing network-facing exists yet. |

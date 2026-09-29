@@ -4,10 +4,12 @@
 #include <QWidget>
 
 class QLineEdit;
+class QToolButton;
 
 namespace up {
 class EditorSession;
-}
+class MediaAssets;
+}  // namespace up
 
 namespace up::ui {
 
@@ -24,16 +26,21 @@ protected:
     QStringList mimeTypes() const override;
 };
 
-// Media browser: lists project media with technical metadata and online state,
-// supports search, import and relinking.
+// Media browser: lists project media with thumbnails, technical metadata and
+// online state; supports search, import and relinking.
 class MediaPoolPanel : public QWidget {
     Q_OBJECT
 public:
     explicit MediaPoolPanel(QWidget* parent = nullptr);
 
     void setSession(EditorSession* session);
+    // Source of thumbnails (generated in the background; may be null).
+    void setAssets(MediaAssets* assets);
     void refresh();
+    // Fills in thumbnails that have become ready since the last refresh.
+    void updateThumbnails();
     int itemCount() const;
+    int thumbnailCount() const;
     QString selectedMediaId() const;
 
 signals:
@@ -43,9 +50,12 @@ signals:
 
 private:
     void showContextMenu(const QPoint& pos);
+    void applyIconSize();
 
     EditorSession* session_ = nullptr;
+    MediaAssets* assets_ = nullptr;
     QLineEdit* search_ = nullptr;
+    QToolButton* largeThumbnails_ = nullptr;
     MediaTree* tree_ = nullptr;
 };
 

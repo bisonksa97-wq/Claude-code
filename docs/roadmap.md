@@ -7,7 +7,7 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 
 ## Phase 1: Media ◐
 - ✅ Import, probe metadata, media pool list, search, offline detection, relink/replace source
-- ☐ **Thumbnails and audio waveforms** with a regeneratable cache directory (§57)
+- ✅ Thumbnails and audio waveforms, background jobs, regeneratable disk cache (session 3)
 - ☐ Bins/sub-bins UI, ratings, keywords, markers, smart bins
 - ☐ Source viewer with in/out marks → three-point editing
 
@@ -35,8 +35,8 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Phase 1 media essentials: thumbnails and audio waveforms**, with a safely deletable, regeneratable cache (§57):
-1. A `cache` module with a content-addressed disk cache (key = media id + file size/mtime + parameters) and size limits.
-2. A background job runner (`jobs` module: queue, priority, cancel) that generates poster frames and waveform peak files with the existing decoders.
-3. Show them in the media pool (thumbnail view) and draw waveforms on audio clips in the timeline.
-4. Tests: deterministic peaks from synthetic tones, cache invalidation when a file changes or is relinked, and cancellation.
+**Source viewer and three-point editing (Phase 1/2):**
+1. Source monitor that loads a media item (double-click in the media pool), with its own transport and in/out marks stored on the media item (undoable).
+2. Timeline in/out points and track targeting (source patching) in the model and UI.
+3. Insert (`,`) and overwrite (`.`) edits using source in/out and the playhead or timeline in/out. Reuses `placeMedia` with a source range.
+4. Tests: three-point edit math (every combination of marks), undo, persistence of marks in `.uproj` (a format-version bump with a migration test).
