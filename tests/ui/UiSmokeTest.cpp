@@ -9,12 +9,16 @@
 #include <QTest>
 
 #include "app/EditorSession.h"
+#include "playback/AudioOutput.h"
 #include "support/TestSupport.h"
 #include "ui/MainWindow.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
 #include "ui/ViewerPanel.h"
+#ifdef UP_HAVE_QT_MULTIMEDIA
+#include "ui/QtAudioOutput.h"
+#endif
 
 using namespace up;
 
@@ -121,6 +125,91 @@ TEST(Ui, EditWorkflowThroughWidgets) {
         window.grab().save(QString::fromLocal8Bit(shot));
     }
 }
+
+namespace {
+
+// Audio device double that the test pumps manually.
+class PumpedAudio final : public playback::AudioOutput {
+public:
+    Status start(int, int channels, Pull pull) override {
+        ch_ = channels;
+        pull_ = std::move(pull);
+        return Status::success();
+    }
+    void stop() override { pull_ = nullptr; }
+    int64_t playedFrames() const override { return played_; }
+    bool active() const { return static_cast<bool>(pull_); }
+    double pump(int64_t frames) {
+        std::vector<float> buf(static_cast<std::size_t>(frames * ch_));
+        pull_(buf.data(), frames);
+        played_ += frames;
+        double peak = 0;
+        for (float v : buf) peak = std::max(peak, static_cast<double>(std::abs(v)));
+        return peak;
+    }
+
+private:
+    int ch_ = 2;
+    Pull pull_;
+    std::atomic<int64_t> played_{0};
+};
+
+}  // namespace
+
+TEST(Ui, ViewerPlaysAudioAndVideoInSync) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 25, 440));
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 25, 440));
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    auto session = EditorSession::createNew("Play", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    ASSERT_TRUE(session->appendMedia(ids[1]).ok());
+    window.setSession(std::move(session));
+    auto audio = std::make_shared<PumpedAudio>();
+    ui::ViewerPanel* viewer = window.viewer();
+    viewer->setAudioOutput(audio);
+    window.show();
+
+    viewer->togglePlay();
+    ASSERT_TRUE(viewer->isPlaying());
+    EXPECT_TRUE(viewer->playingWithAudio());
+    ASSERT_TRUE(audio->active());
+
+    // Play one second of audio (48000 samples) in device-sized chunks.
+    double peak = 0;
+    for (int i = 0; i < 47; ++i) {
+        QTest::qWait(2);
+        peak = std::max(peak, audio->pump(1024));
+    }
+    EXPECT_GT(peak, 0.2);  // the 440 Hz tone is audible
+    // The viewer and the timeline playhead follow the audio clock into the blue clip.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return viewer->position() == 25; }, 2000)) << viewer->position();
+    EXPECT_EQ(window.timeline()->playhead(), 25);
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        const QImage img = viewer->currentImage();
+        return !img.isNull() && img.pixelColor(img.width() / 2, img.height() / 2).blue() > 180;
+    }, 2000));
+
+    // Editing while playing restarts playback from the current position with the new timeline.
+    ASSERT_TRUE(window.session()->razorAt(30).ok());
+    EXPECT_TRUE(viewer->isPlaying());
+
+    viewer->togglePlay();
+    EXPECT_FALSE(viewer->isPlaying());
+    EXPECT_FALSE(audio->active());
+}
+
+#ifdef UP_HAVE_QT_MULTIMEDIA
+TEST(Ui, QtAudioOutputReportsMissingDeviceClearly) {
+    ui::QtAudioOutput output;
+    if (ui::QtAudioOutput::deviceAvailable()) GTEST_SKIP() << "an audio device exists; covered manually";
+    const Status s = output.start(48000, 2, [](float*, int64_t) {});
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.error().code, ErrorCode::NotFound);
+    EXPECT_FALSE(s.error().suggestion.empty());
+}
+#endif
 
 TEST(Ui, ThemesUseCentralTokens) {
     for (auto kind : {ui::ThemeKind::Dark, ui::ThemeKind::Light, ui::ThemeKind::HighContrast}) {

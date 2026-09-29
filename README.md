@@ -13,10 +13,11 @@ Everything else is on the [roadmap](docs/roadmap.md). The [feature status](docs/
 - Frame-accurate timeline: overwrite/insert/append, razor, lift, ripple delete, trim, ripple trim, roll, slip, slide, move, linked A/V, sync-locked insert
 - Command-based undo/redo with exact timeline snapshots
 - Versioned, human-readable `.uproj` projects with migrations, atomic saves, backups, autosave and crash recovery
+- Real-time playback with audio as the master clock and video rendered ahead on a worker thread
 - FFmpeg-based probing, frame-accurate decoding, resampled audio, H.264/AAC export in the background with cancel
 - Offline media detection, relinking, and folder-relative media resolution
 - Qt 6 desktop UI with dark, light and high-contrast themes built from central design tokens
-- 68 automated tests (unit, integration, end-to-end export verification, offscreen UI)
+- 76 automated tests (unit, integration, end-to-end export verification, offscreen UI)
 
 ## Build
 ```bash
@@ -63,6 +64,7 @@ src/project   project model + .uproj format
 src/codec     FFmpeg probe/decode/encode
 src/media     import, relink, search, synthetic media
 src/render    compositor, mixer, export
+src/playback  real-time A/V playback engine
 src/app       EditorSession (application services)
 src/cli       ultimatepost CLI
 src/ui        Qt desktop application

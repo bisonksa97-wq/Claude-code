@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QImage>
 #include <QWidget>
 #include <memory>
@@ -16,6 +15,10 @@ class EditorSession;
 namespace render {
 class FrameCompositor;
 }
+namespace playback {
+class AudioOutput;
+class PlaybackEngine;
+}  // namespace playback
 }  // namespace up
 
 namespace up::ui {
@@ -36,9 +39,10 @@ private:
     QImage image_;
 };
 
-// Timeline viewer with transport controls and real-time video playback.
-// Playback is clocked by wall time; frames that cannot be rendered in time are
-// skipped (and counted) rather than slowing playback down.
+// Timeline viewer with transport controls and real-time playback.
+// Playback runs in playback::PlaybackEngine (audio + video workers, audio as the
+// master clock when a device exists); this panel only displays what it produces.
+// While stopped, frames are rendered on demand at the playhead.
 class ViewerPanel : public QWidget {
     Q_OBJECT
 public:
@@ -46,9 +50,12 @@ public:
     ~ViewerPanel() override;
 
     void setSession(EditorSession* session);
+    // Replaces the audio device (tests inject fakes; nullptr = silent, wall-clock playback).
+    void setAudioOutput(std::shared_ptr<playback::AudioOutput> output);
     FrameIndex position() const { return position_; }
     bool isPlaying() const;
-    int droppedFrames() const { return dropped_; }
+    int droppedFrames() const;
+    bool playingWithAudio() const;
     const QImage& currentImage() const;
 
 public slots:
@@ -58,7 +65,8 @@ public slots:
     void step(int frames);
     void goToStart();
     void goToEnd();
-    // Re-renders the current frame (after edits or media changes).
+    // Re-renders the current frame after edits or media changes; restarts playback
+    // from the current position so the change is heard and seen immediately.
     void refresh();
 
 signals:
@@ -69,17 +77,17 @@ private:
     void tick();
     void renderCurrent();
     void updateLabel();
+    QSize previewSize() const;
 
     EditorSession* session_ = nullptr;
     std::unique_ptr<render::FrameCompositor> compositor_;
     FrameView* view_ = nullptr;
     QLabel* timecode_ = nullptr;
+    QLabel* playbackInfo_ = nullptr;
+    std::unique_ptr<playback::PlaybackEngine> engine_;
     QToolButton* playButton_ = nullptr;
     QTimer* timer_ = nullptr;
-    QElapsedTimer clock_;
     FrameIndex position_ = 0;
-    FrameIndex playStart_ = 0;
-    int dropped_ = 0;
     QString lastError_;
 };
 

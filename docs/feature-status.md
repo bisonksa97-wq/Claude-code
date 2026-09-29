@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 1._
+_Last updated: session 2._
 
 ## First vertical slice (§90)
 
@@ -13,7 +13,7 @@ _Last updated: session 1._
 | Import video | IMPLEMENTED | File ▸ Import, Media Pool button, `ultimatepost import`; SessionTest |
 | Show media | IMPLEMENTED | Media Pool (name, duration, format, online state, search); UI test |
 | Drag video to timeline | IMPLEMENTED | Drag from Media Pool; overwrite by default, Ctrl = insert; UI test |
-| Play video | PARTIAL | Real-time video playback in the viewer, dropping frames when rendering can't keep up. **No audio monitoring during playback yet.** |
+| Play video | IMPLEMENTED | `PlaybackEngine`: audio through the system output (Qt Multimedia) as the master clock, video rendered ahead on a worker thread and synced to it, dropped-frame and underrun counters, silent wall-clock fallback without a device. Tests: PlaybackTest (played audio equals the offline mix; clock, prefetch, frame dropping, fallback), UI test (viewer and playhead follow the audio clock). **The real `QAudioSink` path has not been heard on hardware:** the development container has no audio device. |
 | Cut clip | IMPLEMENTED | Razor at playhead (Ctrl+K), `ultimatepost razor`; ops, session and UI tests |
 | Trim clip | IMPLEMENTED | Drag clip edges (Shift = ripple), `[`/`]` keys, `ultimatepost trim`; tests |
 | Add second clip | IMPLEMENTED | Drag/append; tests |
@@ -34,7 +34,7 @@ _Last updated: session 1._
 | 6 | Text-based editing | NOT IMPLEMENTED | |
 | 7–15 | Motion graphics, 2D/3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
-| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; stereo mix on export. No pan, EQ, dynamics, automation or buses. |
+| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; stereo mix for playback and export. No pan, EQ, dynamics, automation or buses. |
 | 21–22 | ADR, Foley | NOT IMPLEMENTED | |
 | 23 | Captions/subtitles | NOT IMPLEMENTED | |
 | 24–30 | AI search, masking, tracking, enhancement, audio AI, generative video/audio | NOT IMPLEMENTED | No AI provider abstraction yet (planned for Phase 10). |
@@ -64,5 +64,5 @@ _Last updated: session 1._
 | Themes / design tokens (§69) | IMPLEMENTED | Dark, light, high contrast. |
 | Dockable/floating panels (§68) | PARTIAL | Qt docks can float onto other monitors. Workspace layouts are not saved yet. |
 | Accessibility (§70) | PARTIAL | Keyboard shortcuts for all edit/transport actions, accessible names, font-scaled metrics. Shortcut remapping is not available. |
-| Performance monitor (§75) | NOT IMPLEMENTED | The viewer counts dropped frames internally; no panel yet. |
+| Performance monitor (§75) | PARTIAL | The viewer shows the clock source and dropped frames during playback. The engine also counts audio underruns. There is no dedicated panel. |
 | Security (§71) | NOT IMPLEMENTED | Nothing network-facing exists yet. |

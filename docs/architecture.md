@@ -13,12 +13,13 @@ Dependencies only point downward.
 | codec | `up_codec` | FFmpeg wrappers: probe, `VideoDecoder`, `AudioDecoder`, `MediaWriter` | core, FFmpeg |
 | media | `up_media` | Import, offline detection, relink validation, search, synthetic test media | core, project, codec |
 | render | `up_render` | `FrameCompositor`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
+| playback | `up_playback` | `PlaybackEngine` (real-time A/V playback), `AudioOutput`/`Clock` interfaces, `SampleFifo` | core, project, render |
 | app | `up_app` | `EditorSession` application services and undoable project commands | all of the above |
 | cli | `ultimatepost` | Command-line front end | app |
-| ui | `up_ui`, `ultimatepost-studio` | Qt Widgets front end | app, Qt 6 |
+| ui | `up_ui`, `ultimatepost-studio` | Qt Widgets front end; `QtAudioOutput` adapter (Qt Multimedia, optional) | app, playback, Qt 6 |
 
 The conceptual engines from the master prompt map onto modules as they are built.
-Today: Project, Media, Timeline, Codec, Video (CPU compositor), Audio (mixer), Render and UI exist.
+Today: Project, Media, Timeline, Codec, Video (CPU compositor), Audio (mixer, playback), Render and UI exist.
 The rest are listed in [roadmap.md](roadmap.md).
 
 ## Key design rules
@@ -34,7 +35,9 @@ The rest are listed in [roadmap.md](roadmap.md).
 
 - The model (`Project`, `Timeline`) is owned by the UI thread and is not thread-safe.
 - `ExportJob` receives a **copy** of the project, so export runs on a worker thread while editing continues.
-- Decoders are single-threaded objects. Each `FrameCompositor`/`AudioMixer` owns its own `DecoderPool`. The viewer and export never share decoders.
+- Decoders are single-threaded objects. Each `FrameCompositor`/`AudioMixer` owns its own `DecoderPool`. The viewer, playback and export never share decoders.
+- `PlaybackEngine` also works on a project **copy**. It runs an audio worker (mixes ahead into a 500 ms `SampleFifo` that the device pulls from) and a video worker (renders up to 6 frames ahead at preview size). The UI thread only polls `frameForDisplay()` and `position()`. Edits during playback restart the engine from the current frame with a fresh snapshot.
+- Playback threads were checked with ThreadSanitizer. The only reports are inside uninstrumented FFmpeg and Qt thread pools, with none in Ultimate Post code.
 - FFmpeg's internal frame threading is enabled in the video decoder.
 
 ## Crash safety

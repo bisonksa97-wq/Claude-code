@@ -24,6 +24,8 @@ if(UP_BUILD_UI)
     if(NOT Qt6_FOUND)
         message(WARNING "Qt6 not found: the desktop UI will not be built (UP_BUILD_UI=OFF)")
         set(UP_BUILD_UI OFF)
+    else()
+        find_package(Qt6 COMPONENTS Multimedia QUIET)
     endif()
 endif()
 

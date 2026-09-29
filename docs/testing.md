@@ -7,8 +7,8 @@ ctest --test-dir build --output-on-failure
 | Suite | Binary | Covers |
 |---|---|---|
 | Unit | `unit_tests` | Rational/timecode (incl. drop-frame), errors, logging, atomic IO, command stack, every timeline operation, randomized timeline stress test, project format round-trip, validation, migrations |
-| Integration | `integration_tests` | Probe, frame-accurate sequential and random video decode, audio decode accuracy and seek alignment, encoder validation and fallback, session-level linked/sync editing, relink/offline, moved-project resolution, autosave/recovery, **end-to-end vertical slice with decoded-output verification**, mute/offline rendering, export cancel, aspect fit |
-| UI | `ui_tests` | Drives the real `MainWindow` offscreen: media pool, drop to timeline with snapping, viewer frame, razor action, mouse trim of linked clips, undo, save, export; theme tokens |
+| Integration | `integration_tests` | Playback engine (audio continuity against the offline mix, audio clock, video prefetch/drop, wall-clock fallback, snapshot isolation), sample FIFO, probe, frame-accurate sequential and random video decode, audio decode accuracy and seek alignment, encoder validation and fallback, session-level linked/sync editing, relink/offline, moved-project resolution, autosave/recovery, **end-to-end vertical slice with decoded-output verification**, mute/offline rendering, export cancel, aspect fit |
+| UI | `ui_tests` | Drives the real `MainWindow` offscreen: media pool, drop to timeline with snapping, viewer frame, razor action, mouse trim of linked clips, undo, save, export; playback through the viewer with an injected audio device; the Qt audio adapter's no-device error; theme tokens |
 
 ## Deterministic test media
 
@@ -19,6 +19,11 @@ No binary media is checked in. Tests generate it with `media::generateSyntheticM
 - Sine tones at chosen frequency and level, for audio RMS checks.
 
 UI tests default to Qt's `offscreen` platform. Set `UP_UI_SCREENSHOT=/path/shot.png` to save a screenshot of the test window.
+
+## Threading checks
+Build with `-DCMAKE_CXX_FLAGS=-fsanitize=thread -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread` and run the playback and UI tests. Expect reports that originate inside FFmpeg or Qt thread pools; they are uninstrumented and not our races. Any report with Ultimate Post frames on both sides is a bug.
+
+Playback tests use a fake `AudioOutput` pumped by the test and a `ManualClock`, so they are timing-independent. They passed 50 consecutive repeats.
 
 ## Not yet covered
 Performance and stress benchmarks, 4K/8K/HDR/RAW golden media, Windows and macOS runs, and long-duration tests (see the §73 golden dataset in the roadmap).
