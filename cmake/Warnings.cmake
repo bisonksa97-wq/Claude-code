@@ -1,0 +1,23 @@
+# Applies the project's warning policy to a target.
+function(up_set_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        if(UP_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
+        if(UP_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
+# Declares an Ultimate Post static library module rooted at src/.
+function(up_add_module name)
+    cmake_parse_arguments(ARG "" "" "SOURCES;DEPS" ${ARGN})
+    add_library(${name} STATIC ${ARG_SOURCES})
+    target_include_directories(${name} PUBLIC "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(${name} PUBLIC ${ARG_DEPS})
+    up_set_warnings(${name})
+endfunction()
