@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <map>
+#include <string>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -30,5 +31,9 @@ private:
     int currentVersion_;
     std::map<int, Step> steps_;
 };
+
+// Bits per component encoded in an FFmpeg pixel format name ("yuv420p10le" -> 10);
+// 8 when the name carries no depth. Used to upgrade projects saved before bitDepth existed.
+int bitDepthFromPixelFormatName(const std::string& name);
 
 }  // namespace up

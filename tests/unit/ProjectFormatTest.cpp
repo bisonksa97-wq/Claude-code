@@ -422,6 +422,28 @@ TEST(ProjectFormat, RoundTripsColorSpacesAndMigratesV8) {
     EXPECT_EQ(tolerated.value().timelines[0].colorSpace, ColorSpace{});
 }
 
+TEST(ProjectFormat, MigratesV9ToMediaBitDepth) {
+    EXPECT_EQ(bitDepthFromPixelFormatName("yuv420p"), 8);
+    EXPECT_EQ(bitDepthFromPixelFormatName("yuv420p10le"), 10);
+    EXPECT_EQ(bitDepthFromPixelFormatName("yuv422p12be"), 12);
+    EXPECT_EQ(bitDepthFromPixelFormatName("gbrp10le"), 10);
+    EXPECT_EQ(bitDepthFromPixelFormatName("p010le"), 10);
+    EXPECT_EQ(bitDepthFromPixelFormatName("rgb48be"), 16);
+    EXPECT_EQ(bitDepthFromPixelFormatName("rgba64le"), 16);
+    EXPECT_EQ(bitDepthFromPixelFormatName(""), 8);
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["formatVersion"] = 9;
+    doc["media"][0]["info"]["pixelFormat"] = "yuv422p10le";
+    doc["media"][0]["info"].erase("bitDepth");
+    auto migrated = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(migrated.ok()) << migrated.error().toString();
+    EXPECT_EQ(migrated.value().media[0].info.bitDepth, 10);
+    // Current files store it directly.
+    Project p = sampleProject();
+    p.media[0].info.bitDepth = 12;
+    EXPECT_EQ(ProjectSerializer::fromJson(ProjectSerializer::toJson(p)).value().media[0].info.bitDepth, 12);
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

@@ -16,6 +16,10 @@ class QActionGroup;
 class QTimer;
 
 namespace up {
+namespace render {
+class RenderQueue;
+struct ExportOptions;
+}  // namespace render
 class EditorSession;
 class MediaAssets;
 class Project;
@@ -27,6 +31,7 @@ class ColorPanel;
 class InspectorPanel;
 class MediaPoolPanel;
 class MixerPanel;
+class RenderQueuePanel;
 class ScopesPanel;
 class TimelinePanel;
 class TimelineView;
@@ -47,6 +52,10 @@ public:
     MixerPanel* mixer() const { return mixer_; }
     ColorPanel* colorPanel() const { return color_; }
     ScopesPanel* scopes() const { return scopes_; }
+    render::RenderQueue* renderQueue() const { return renderQueue_.get(); }
+    RenderQueuePanel* renderQueuePanel() const { return renderQueuePanel_; }
+    // Adds an export of the current timeline (a snapshot of the project) to the render queue.
+    int queueExport(const render::ExportOptions& options, const QString& name = {});
     ViewerPanel* viewer() const { return viewer_; }  // program monitor
     ViewerPanel* sourceViewer() const { return sourceViewer_; }
     ViewerPanel* activeViewer() const { return activeViewer_; }
@@ -120,6 +129,8 @@ private:
     MixerPanel* mixer_ = nullptr;
     ColorPanel* color_ = nullptr;
     ScopesPanel* scopes_ = nullptr;
+    std::unique_ptr<render::RenderQueue> renderQueue_;
+    RenderQueuePanel* renderQueuePanel_ = nullptr;
     ViewerPanel* viewer_ = nullptr;
     ViewerPanel* sourceViewer_ = nullptr;
     ViewerPanel* activeViewer_ = nullptr;

@@ -38,9 +38,11 @@ json toJson(const MediaInfo& i) {
                 {"fileSize", i.fileSize},       {"hasVideo", i.hasVideo},
                 {"videoCodec", i.videoCodec},   {"width", i.width},
                 {"height", i.height},           {"frameRate", i.frameRate.toString()},
-                {"pixelFormat", i.pixelFormat}, {"isStill", i.isStill},
+                {"pixelFormat", i.pixelFormat}, {"isStill", i.isStill}, {"bitDepth", i.bitDepth},
                 {"colorPrimaries", i.colorPrimaries}, {"colorTransfer", i.colorTransfer},
                 {"colorMatrix", i.colorMatrix}, {"colorRange", i.colorRange},
+                {"masteringMaxLuminance", i.masteringMaxLuminance}, {"masteringMinLuminance", i.masteringMinLuminance},
+                {"maxCll", i.maxCll}, {"maxFall", i.maxFall},
                 {"hasAudio", i.hasAudio},       {"audioCodec", i.audioCodec},
                 {"sampleRate", i.sampleRate},   {"channels", i.channels},
                 {"timecode", i.timecode}};
@@ -58,10 +60,15 @@ MediaInfo mediaInfoFromJson(const json& j) {
     i.frameRate = Rational::parse(j.value("frameRate", "0/1"));
     i.pixelFormat = j.value("pixelFormat", "");
     i.isStill = j.value("isStill", false);
+    i.bitDepth = j.value("bitDepth", 8);
     i.colorPrimaries = j.value("colorPrimaries", "");
     i.colorTransfer = j.value("colorTransfer", "");
     i.colorMatrix = j.value("colorMatrix", "");
     i.colorRange = j.value("colorRange", "");
+    i.masteringMaxLuminance = j.value("masteringMaxLuminance", 0.0);
+    i.masteringMinLuminance = j.value("masteringMinLuminance", 0.0);
+    i.maxCll = j.value("maxCll", 0);
+    i.maxFall = j.value("maxFall", 0);
     i.hasAudio = j.value("hasAudio", false);
     i.audioCodec = j.value("audioCodec", "");
     i.sampleRate = j.value("sampleRate", 0);

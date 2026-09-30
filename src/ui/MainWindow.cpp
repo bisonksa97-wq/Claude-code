@@ -24,6 +24,9 @@
 #include "app/SourceProject.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
+#include "render/RenderQueue.h"
+#include "ui/ExportDialog.h"
+#include "ui/RenderQueuePanel.h"
 #include "ui/ColorPanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/MarkerDialog.h"
@@ -85,6 +88,18 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     addDockWidget(Qt::RightDockWidgetArea, colorDock);
     tabifyDockWidget(inspectorDock, colorDock);
     inspectorDock->raise();
+
+    renderQueue_ = std::make_unique<render::RenderQueue>();
+    renderQueuePanel_ = new RenderQueuePanel(this);
+    auto* queueDock = new QDockWidget(tr("Render Queue"), this);
+    queueDock->setObjectName("RenderQueueDock");
+    queueDock->setWidget(renderQueuePanel_);
+    addDockWidget(Qt::RightDockWidgetArea, queueDock);
+    tabifyDockWidget(inspectorDock, queueDock);
+    inspectorDock->raise();
+    renderQueuePanel_->setQueue(renderQueue_.get());
+    connect(renderQueuePanel_, &RenderQueuePanel::jobFinished, this,
+            [this](int, const QString& summary) { statusBar()->showMessage(summary, 8000); });
 
     scopes_ = new ScopesPanel(this);
     auto* scopesDock = new QDockWidget(tr("Scopes"), this);
@@ -173,6 +188,9 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
 MainWindow::~MainWindow() {
     viewer_->stop();
     sourceViewer_->stop();
+    // Cancel and join background exports before the panel they report to goes away.
+    renderQueuePanel_->setQueue(nullptr);
+    renderQueue_.reset();
     // Stop background asset jobs before any widget they notify is destroyed.
     assets_->setListener({});
     assets_.reset();
@@ -250,7 +268,7 @@ void MainWindow::buildMenus() {
     file->addSeparator();
     add(file, tr("&Import Media…"), QKeySequence("Ctrl+I"), &MainWindow::importMedia);
     add(file, tr("Clear Media Cache"), QKeySequence(), &MainWindow::clearMediaCache);
-    add(file, tr("&Export Timeline…"), QKeySequence("Ctrl+M"), &MainWindow::exportTimeline);
+    add(file, tr("&Export…"), QKeySequence("Ctrl+M"), &MainWindow::exportTimeline);
     file->addSeparator();
     add(file, tr("&Quit"), QKeySequence::Quit, &QWidget::close);
 
@@ -451,6 +469,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         event->ignore();
         return;
     }
+    if (renderQueue_->busy()) {
+        const auto answer = QMessageBox::question(this, tr("Exports Running"),
+                                                  tr("The render queue still has exports to finish. Quit anyway and cancel them?"));
+        if (answer != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+    }
     if (maybeSave()) event->accept();
     else event->ignore();
 }
@@ -592,10 +618,23 @@ void MainWindow::exportTimeline() {
         showError(tr("There is nothing to export."), tr("Add clips to the timeline first."));
         return;
     }
-    QString path = QFileDialog::getSaveFileName(this, tr("Export Timeline"), qs(session_->project().name) + ".mp4",
-                                                tr("MPEG-4 (*.mp4);;QuickTime (*.mov);;Matroska (*.mkv)"));
-    if (path.isEmpty()) return;
-    exportTo(path);
+    std::vector<Error> problems;
+    const QString presetDir = QSettings().value("export/presetDirectory", QString::fromStdString(render::defaultPresetDirectory().string())).toString();
+    auto presets = render::loadPresets(presetDir.toStdString(), &problems);
+    for (const auto& p : problems) UP_LOG_WARN(log::sub::Ui, "Preset skipped: " << p.message);
+    const auto& project = session_->project();
+    const QString folder = project.filePath.empty() ? QDir::homePath() : qs(project.filePath.parent_path().string());
+    const QString base = folder + "/" + qs(project.name.empty() ? session_->timeline().name : project.name);
+    ExportDialog dialog(std::move(presets), session_->timeline(), base, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    queueExport(dialog.options(), dialog.jobName());
+}
+
+int MainWindow::queueExport(const render::ExportOptions& options, const QString& name) {
+    const int id = renderQueue_->add(session_->project(), session_->timeline().id, options, name.toStdString());
+    if (auto* dock = findChild<QDockWidget*>("RenderQueueDock")) dock->raise();
+    statusBar()->showMessage(tr("Queued %1").arg(qs(options.output.filename().string())), 4000);
+    return id;
 }
 
 bool MainWindow::exportTo(const QString& path, bool showProgress) {

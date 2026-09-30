@@ -21,11 +21,17 @@ struct MediaInfo {
     FrameRate frameRate{0, 1};
     std::string pixelFormat;
     bool isStill = false;
+    int bitDepth = 8;  // bits per component of the video pixel format
     // Colour tags as FFmpeg names ("bt709", "smpte2084", ...); empty = unspecified.
     std::string colorPrimaries;
     std::string colorTransfer;
     std::string colorMatrix;
     std::string colorRange;  // "tv" (limited) or "pc" (full)
+    // HDR10 static metadata when present (0 = absent).
+    double masteringMaxLuminance = 0.0;  // cd/m²
+    double masteringMinLuminance = 0.0;
+    int maxCll = 0;
+    int maxFall = 0;
 
     bool hasAudio = false;
     std::string audioCodec;

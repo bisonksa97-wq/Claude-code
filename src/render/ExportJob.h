@@ -3,20 +3,32 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <optional>
 
 #include "codec/MediaWriter.h"
 #include "core/Result.h"
 #include "project/Project.h"
+#include "render/ExportPresets.h"
 #include "timeline/Timeline.h"
 
 namespace up::render {
 
 struct ExportOptions {
+    // A file, or for image-sequence presets a folder to create (frames are
+    // <folder>/<folder name>_000001.png ...).
     std::filesystem::path output;
+    // Delivery settings. Without a preset: H.264/AAC with the fields below.
+    std::optional<ExportPreset> preset;
     std::string videoCodec;  // empty = default encoder
     int crf = 18;
     int64_t videoBitrate = 0;
     bool includeAudio = true;
+    // HDR10 metadata written when the output colour space is PQ or HLG. MaxCLL/MaxFALL
+    // are not measured; 0 leaves them out.
+    double masteringMaxLuminance = 1000.0;
+    double masteringMinLuminance = 0.0001;
+    int maxCll = 0;
+    int maxFall = 0;
     // Export range in timeline frames; outFrame <= 0 means "to the end of the timeline".
     FrameIndex inFrame = 0;
     FrameIndex outFrame = 0;

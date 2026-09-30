@@ -7,6 +7,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
+#include <libswscale/swscale.h>
 }
 
 #include <memory>
@@ -52,5 +53,10 @@ inline int alignedStride(int bytes) { return (bytes + kSwsAlign - 1) / kSwsAlign
 int swsMatrixFor(AVColorSpace space, int height);
 // swscale colourspace for an FFmpeg matrix name ("bt709", "bt2020nc", ...).
 int swsMatrixForName(const std::string& name);
+// Makes sure `ctx` converts with `matrix` (SWS_CS_*) and the given ranges. Call it after
+// every sws_getCachedContext: that function may free and recreate the context (even at
+// the same address), silently resetting it to BT.601, so pointer identity cannot be
+// used to remember that a context was configured.
+void ensureSwsColorspace(SwsContext* ctx, int matrix, int srcFullRange, int dstFullRange);
 
 }  // namespace up::ffmpeg

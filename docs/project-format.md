@@ -1,6 +1,6 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **9**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **10**, `Project::kFormatVersion`).
 
 ```jsonc
 {
@@ -93,6 +93,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 | 7 | Clip `grade` (primary colour correction: lift/gamma/gain/offset master and RGB, contrast, pivot, saturation, exposure, temperature, tint; all animatable) | An empty grade object (identity) on every clip. Covered by `ProjectFormat.MigratesV6ToGrades`. Parameter ids are listed in `timeline/Grade.cpp`. Unknown ids are ignored, non-finite values are rejected on load, and out-of-range values are clamped when rendering. |
 | 8 | Grade `curves` and `lut` (inside `grade`); clip `gradeBypass`, `gradeVersion`, `gradeVersions`; timeline `outputLut`, `gradesBypassed` | Bypass off, one active version named "A" with no stored versions, no output LUT (curves and LUT are simply absent). Covered by `ProjectFormat.RoundTripsCurvesLutsVersionsAndMigratesV7`. Curves must be valid (points in 0..1, distinct x, sorted, tone curves ≥ 2 points) and version names unique per clip, or the file is rejected. LUT paths resolve like media paths: absolute first, then relative to the project file. |
 | 9 | Timeline `colorSpace` and `outputColorSpace`; media `colorSpace`; media `info` gains `colorPrimaries`, `colorTransfer`, `colorMatrix`, `colorRange` (FFmpeg tag names) | Timelines become Rec.709 gamma 2.4 with the output in the same space; media overrides are null. Old media info has no tags, so video is detected as Rec.709 gamma 2.4 (pixels pass through unchanged, as before) and stills as sRGB (converted, so they render slightly differently than before). Covered by `ProjectFormat.RoundTripsColorSpacesAndMigratesV8`. Ids are `<primaries>/<transfer>` from `timeline/ColorSpace.cpp`; an unknown id falls back to Rec.709 gamma 2.4 with a logged warning. |
+| 10 | Media `info` gains `bitDepth` (bits per component of the video pixel format) and HDR10 metadata (`masteringMaxLuminance`, `masteringMinLuminance`, `maxCll`, `maxFall`; 0 = absent) | `bitDepth` is derived from the stored FFmpeg pixel format name (`yuv422p10le` → 10, `rgb48be` → 16, otherwise 8), so 10-bit media in old projects is decoded at 16 bits without re-importing. Covered by `ProjectFormat.MigratesV9ToMediaBitDepth`. |
 
 ## Safety
 

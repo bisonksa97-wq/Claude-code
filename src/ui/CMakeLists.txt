@@ -3,11 +3,13 @@ set(CMAKE_AUTOMOC ON)
 add_library(up_ui STATIC
     ColorPanel.cpp
     EffectsDialog.cpp
+    ExportDialog.cpp
     InspectorPanel.cpp
     MainWindow.cpp
     MarkerDialog.cpp
     MediaPoolPanel.cpp
     MixerPanel.cpp
+    RenderQueuePanel.cpp
     ScopesPanel.cpp
     Theme.cpp
     TimelineView.cpp

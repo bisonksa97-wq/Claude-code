@@ -9,6 +9,16 @@ namespace up {
 
 ProjectMigrator::ProjectMigrator(int currentVersion) : currentVersion_(currentVersion) {}
 
+int bitDepthFromPixelFormatName(const std::string& name) {
+    // FFmpeg names carry the depth: yuv420p10le, gbrp12le, p010le, rgb48be, rgba64le, gray16be ...
+    static const std::pair<const char*, int> patterns[] = {
+        {"p16", 16}, {"p14", 14}, {"p12", 12}, {"p10", 10}, {"p010", 10}, {"p016", 16}, {"rgb48", 16}, {"bgr48", 16},
+        {"rgba64", 16}, {"bgra64", 16}, {"gray16", 16}, {"gray12", 12}, {"gray10", 10}, {"rgb10", 10}, {"y210", 10}};
+    for (const auto& [pattern, depth] : patterns)
+        if (name.find(pattern) != std::string::npos) return depth;
+    return 8;
+}
+
 const ProjectMigrator& ProjectMigrator::standard() {
     static const ProjectMigrator migrator = [] {
         ProjectMigrator m(Project::kFormatVersion);
@@ -99,6 +109,15 @@ const ProjectMigrator& ProjectMigrator::standard() {
                 tl["outputColorSpace"] = nullptr;
             }
             for (auto& media : doc["media"]) media["colorSpace"] = nullptr;
+            return Status::success();
+        });
+        // v9 -> v10: media info records the bit depth, which selects 16-bit decoding.
+        // Older files only stored the FFmpeg pixel format name, so derive it from that.
+        m.addStep(9, [](nlohmann::json& doc) {
+            for (auto& media : doc["media"]) {
+                if (!media.contains("info") || !media["info"].is_object()) continue;
+                media["info"]["bitDepth"] = bitDepthFromPixelFormatName(media["info"].value("pixelFormat", ""));
+            }
             return Status::success();
         });
         return m;

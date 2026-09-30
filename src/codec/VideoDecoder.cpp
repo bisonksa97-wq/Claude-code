@@ -28,17 +28,21 @@ struct VideoDecoder::Impl {
     int streamIndex = -1;
     AVRational timeBase{1, 1};
     int64_t startPts = 0;
-    SwsContext* sws = nullptr;
+    // One scaler per output format (8-bit and 16-bit RGBA).
+    struct Scaler {
+        SwsContext* ctx = nullptr;
+    };
+    Scaler scaler8;
+    Scaler scaler16;
     std::vector<uint8_t> scratch;  // padded conversion target
-    // YUV matrix/range last configured on `sws` (reconfigured when either changes).
-    const SwsContext* configuredSws = nullptr;
-    int configuredMatrix = -1;
-    int configuredRange = -1;
 
     // Decode forward beyond this many seconds triggers a seek instead.
     static constexpr double kForwardDecodeLimit = 2.0;
 
-    ~Impl() { sws_freeContext(sws); }
+    ~Impl() {
+        sws_freeContext(scaler8.ctx);
+        sws_freeContext(scaler16.ctx);
+    }
 
     int64_t toPts(double seconds) const {
         return startPts + static_cast<int64_t>(std::llround(seconds / av_q2d(timeBase)));
@@ -136,13 +140,16 @@ struct VideoDecoder::Impl {
         }
     }
 
-    Result<VideoFrame> convert(const AVFrame* src, int outW, int outH) {
+    // Converts to packed RGBA of `Frame`'s component type (8-bit RGBA or native-endian RGBA64).
+    template <typename Frame>
+    Result<Frame> convert(const AVFrame* src, int outW, int outH, AVPixelFormat outFormat, Scaler& scaler) {
         if (outW <= 0 || outH <= 0) {
             outW = src->width;
             outH = src->height;
         }
+        SwsContext*& sws = scaler.ctx;
         sws = sws_getCachedContext(sws, src->width, src->height, static_cast<AVPixelFormat>(src->format), outW, outH,
-                                   AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                                   outFormat, SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws) {
             return makeError(ErrorCode::DecodeError, "codec", "Unable to convert the decoded frame to RGB.",
                              "The pixel format may be unsupported.");
@@ -153,24 +160,20 @@ struct VideoDecoder::Impl {
             const int matrix = ffmpeg::swsMatrixFor(src->colorspace, src->height);
             const std::string name = desc->name ? desc->name : "";
             const int fullRange = src->color_range == AVCOL_RANGE_JPEG || name.rfind("yuvj", 0) == 0 ? 1 : 0;
-            if (sws != configuredSws || matrix != configuredMatrix || fullRange != configuredRange) {
-                const int* coefficients = sws_getCoefficients(matrix);
-                sws_setColorspaceDetails(sws, coefficients, fullRange, coefficients, 1, 0, 1 << 16, 1 << 16);
-                configuredSws = sws;
-                configuredMatrix = matrix;
-                configuredRange = fullRange;
-            }
+            ffmpeg::ensureSwsColorspace(sws, matrix, fullRange, 1);
         }
         // Convert into padded scratch memory (see ffmpeg::alignedStride), then copy the
         // tightly packed rows out, so the returned frame never has to absorb SIMD overshoot.
-        const int stride = ffmpeg::alignedStride(outW * 4);
+        constexpr int bytesPerPixel = 4 * static_cast<int>(sizeof(typename decltype(Frame::pixels)::value_type));
+        const int stride = ffmpeg::alignedStride(outW * bytesPerPixel);
         scratch.resize(static_cast<std::size_t>(stride) * outH + ffmpeg::kSwsAlign);
         uint8_t* dst[4] = {scratch.data(), nullptr, nullptr, nullptr};
         int dstStride[4] = {stride, 0, 0, 0};
         sws_scale(sws, src->data, src->linesize, 0, src->height, dst, dstStride);
-        VideoFrame out(outW, outH);
+        Frame out(outW, outH);
         for (int y = 0; y < outH; ++y)
-            std::memcpy(out.row(y), scratch.data() + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(outW) * 4);
+            std::memcpy(out.row(y), scratch.data() + static_cast<std::size_t>(y) * stride,
+                        static_cast<std::size_t>(outW) * bytesPerPixel);
         return out;
     }
 };
@@ -215,7 +218,12 @@ int VideoDecoder::height() const { return impl_->codec->height; }
 
 Result<VideoFrame> VideoDecoder::frameAt(double seconds, int outWidth, int outHeight) {
     UP_TRY(impl_->positionAt(impl_->toPts(std::max(0.0, seconds))));
-    return impl_->convert(impl_->current.get(), outWidth, outHeight);
+    return impl_->convert<VideoFrame>(impl_->current.get(), outWidth, outHeight, AV_PIX_FMT_RGBA, impl_->scaler8);
+}
+
+Result<VideoFrame16> VideoDecoder::frameAt16(double seconds, int outWidth, int outHeight) {
+    UP_TRY(impl_->positionAt(impl_->toPts(std::max(0.0, seconds))));
+    return impl_->convert<VideoFrame16>(impl_->current.get(), outWidth, outHeight, AV_PIX_FMT_RGBA64, impl_->scaler16);
 }
 
 }  // namespace up

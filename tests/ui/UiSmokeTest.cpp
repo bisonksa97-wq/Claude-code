@@ -30,6 +30,14 @@
 
 #include "ui/ColorPanel.h"
 #include "ui/EffectsDialog.h"
+#include "ui/ExportDialog.h"
+#include "ui/RenderQueuePanel.h"
+#include "render/RenderQueue.h"
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QRadioButton>
+#include <QStatusBar>
+#include <QThread>
 #include "ui/InspectorPanel.h"
 #include "ui/MixerPanel.h"
 #include "ui/MediaPoolPanel.h"
@@ -811,6 +819,78 @@ TEST(Ui, ColorManagementMenusAndViewerOverlays) {
     EXPECT_EQ(window.viewer()->displayedImage().pixelColor(2, 2), QColor(0, 80, 255));
     window.viewer()->setOverlay(render::ViewerOverlay::None);
     EXPECT_EQ(window.viewer()->displayedImage(), window.viewer()->currentImage());
+}
+
+TEST(Ui, ExportDialogAndRenderQueuePanel) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(200, 40, 40, 20));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 900);
+    auto session = EditorSession::createNew("Deliver", SequenceSettings{FrameRate{25, 1}, 160, 90, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    ASSERT_TRUE(session->setTimelineMarks(5, 15).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+
+    // The dialog lists the presets, swaps extensions and offers the marked range.
+    ui::ExportDialog dialog(render::builtInPresets(), tl, QString::fromStdString((dir / "deliver").string()), &window);
+    EXPECT_EQ(dialog.presetBox()->count(), static_cast<int>(render::builtInPresets().size()));
+    dialog.selectPreset("wav-24");
+    EXPECT_TRUE(dialog.outputEdit()->text().endsWith("deliver.wav"));
+    EXPECT_FALSE(dialog.hdrControlsVisible());
+    dialog.selectPreset("png-16");
+    EXPECT_TRUE(dialog.outputEdit()->text().endsWith("deliver"));  // a folder
+    dialog.selectPreset("h264-web");
+    EXPECT_TRUE(dialog.outputEdit()->text().endsWith("deliver.mp4"));
+    ASSERT_TRUE(dialog.marksRange()->isEnabled());
+    dialog.marksRange()->setChecked(true);
+    const render::ExportOptions options = dialog.options();
+    ASSERT_TRUE(options.preset.has_value());
+    EXPECT_EQ(options.preset->id, "h264-web");
+    EXPECT_EQ(options.inFrame, 5);
+    EXPECT_EQ(options.outFrame, 15);
+
+    // Queue it: the panel shows the job, its progress and log, then it completes.
+    const int id = window.queueExport(options, dialog.jobName());
+    ui::RenderQueuePanel* panel = window.renderQueuePanel();
+    for (int i = 0; i < 600 && window.renderQueue()->busy(); ++i) {
+        QApplication::processEvents();
+        QThread::msleep(10);
+    }
+    QTest::qWait(250);  // let the coalesced refresh run
+    ASSERT_EQ(panel->list()->topLevelItemCount(), 1);
+    EXPECT_EQ(panel->list()->topLevelItem(0)->text(2), "Done");
+    EXPECT_EQ(window.renderQueue()->job(id)->framesTotal, 10);  // the in/out range
+    EXPECT_TRUE(std::filesystem::exists(dir / "deliver.mp4"));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains("Done"));
+    panel->list()->topLevelItem(0)->setSelected(true);
+    EXPECT_TRUE(panel->logView()->toPlainText().contains("Done: 10 frames"));
+    EXPECT_FALSE(panel->cancelButton()->isEnabled());
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_QUEUE")) {
+        QApplication::processEvents();
+        panel->grab().save(QString::fromLocal8Bit(shot));
+    }
+    ASSERT_TRUE(panel->clearButton()->isEnabled());
+    panel->clearButton()->click();
+    EXPECT_EQ(panel->list()->topLevelItemCount(), 0);
+
+    // With a PQ output the dialog offers HDR10 metadata for video presets.
+    ASSERT_TRUE(window.session()->setOutputColorSpace(ColorSpace{Primaries::Rec2020, Transfer::PQ}).ok());
+    ui::ExportDialog hdr(render::builtInPresets(), tl, QString::fromStdString((dir / "hdr").string()), &window);
+    hdr.selectPreset("h264-web");
+    EXPECT_TRUE(hdr.hdrControlsVisible());
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_EXPORT")) {
+        hdr.selectPreset("hevc-10bit");
+        hdr.show();
+        QApplication::processEvents();
+        hdr.grab().save(QString::fromLocal8Bit(shot));
+    }
+    hdr.selectPreset("wav-24");
+    EXPECT_FALSE(hdr.hdrControlsVisible());
 }
 
 TEST(Ui, AudioMixerStripsMetersAndEffects) {

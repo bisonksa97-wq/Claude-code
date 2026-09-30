@@ -22,6 +22,10 @@
 #include "render/ExportJob.h"
 #include "render/FrameCompositor.h"
 #include "render/Lut.h"
+#include "render/RenderQueue.h"
+#include "core/AtomicFile.h"
+
+#include <nlohmann/json.hpp>
 #include "render/Scopes.h"
 
 namespace fs = std::filesystem;
@@ -220,7 +224,10 @@ Audio effects (types: gain eq3 compressor; effects are numbered from 1 in proces
   ripple-delete <project> <clip>
 
 Rendering
-  export <project> <output.mp4> [--codec libx264] [--crf 18] [--no-audio] [--from <pos>] [--to <pos>]
+  export <project> <output> [--preset <id>] [--codec libx264] [--crf 18] [--no-audio] [--from <pos>] [--to <pos>]
+         [--max-cll N --max-fall N --mastering-peak 1000]   HDR10 metadata for PQ/HLG outputs
+  presets [--presets-dir DIR]              list export presets and whether this build can use them
+  render-queue <queue.json>                run {"jobs": [{"project", "output", "preset", "from", "to"}]} in order
   render-frame <project> <pos> <output.ppm>
 
 Media analysis and cache (default cache: per-user cache folder; override with --cache-dir)
@@ -913,6 +920,18 @@ int main(int argc, char** argv) {
         const Timeline& tl = s.value()->timeline();
         render::ExportOptions options;
         options.output = pos[1];
+        if (auto presetId = a.option("preset")) {
+            std::vector<Error> problems;
+            const auto presets = render::loadPresets(a.option("presets-dir").value_or(render::defaultPresetDirectory().string()), &problems);
+            for (const auto& p : problems) std::cerr << "warning: " << p.message << "\n";
+            const render::ExportPreset* preset = render::findPreset(presets, *presetId);
+            if (!preset) return usageError("unknown preset '" + *presetId + "' (see 'ultimatepost presets')");
+            options.preset = *preset;
+            if (options.output.extension().empty() && !preset->imageSequence()) options.output += preset->extension;
+        }
+        if (auto cll = a.option("max-cll")) options.maxCll = std::atoi(cll->c_str());
+        if (auto fall = a.option("max-fall")) options.maxFall = std::atoi(fall->c_str());
+        if (auto peak = a.option("mastering-peak")) options.masteringMaxLuminance = std::atof(peak->c_str());
         options.videoCodec = a.option("codec").value_or("");
         options.crf = std::atoi(a.option("crf").value_or("18").c_str());
         options.includeAudio = !a.flag("no-audio");
@@ -934,6 +953,62 @@ int main(int argc, char** argv) {
         if (!st.ok()) return fail(st.error());
         std::cout << "Exported " << options.output.string() << "\n";
         return 0;
+    }};
+
+    commands["presets"] = {0, [&](const cli::Args& a) {
+        std::vector<Error> problems;
+        const auto dir = a.option("presets-dir").value_or(render::defaultPresetDirectory().string());
+        for (const auto& p : render::loadPresets(dir, &problems)) {
+            const std::string missing = render::presetUnavailableReason(p);
+            std::cout << p.id << "  " << p.name << (p.builtIn ? "" : " (user)") << "  [" << p.extension << ", "
+                      << (p.video ? std::to_string(p.bitDepth()) + "-bit " + p.videoCodec : std::string("no video"))
+                      << (p.audio ? ", " + p.audioCodec : std::string()) << "]"
+                      << (missing.empty() ? "" : "  UNAVAILABLE: " + missing) << "\n    " << p.description << "\n";
+        }
+        for (const auto& p : problems) std::cerr << "warning: " << p.message << "\n";
+        std::cout << "User presets folder: " << dir << "\n";
+        return 0;
+    }};
+
+    commands["render-queue"] = {1, [&](const cli::Args& a) {
+        // A JSON file: {"jobs": [{"project": "...", "output": "...", "preset": "...", "from": 0, "to": 0}]}
+        auto text = readFile(pos[0]);
+        if (!text.ok()) return fail(text.error());
+        nlohmann::json doc;
+        try {
+            doc = nlohmann::json::parse(text.value());
+        } catch (const nlohmann::json::exception& e) {
+            return fail(makeError(ErrorCode::ParseError, "cli", "The queue file is not valid JSON.", "", e.what()));
+        }
+        const auto presets = render::loadPresets(a.option("presets-dir").value_or(render::defaultPresetDirectory().string()));
+        const fs::path base = fs::absolute(pos[0]).parent_path();
+        render::RenderQueue queue;
+        std::vector<std::unique_ptr<EditorSession>> sessions;
+        for (const auto& j : doc.value("jobs", nlohmann::json::array())) {
+            const fs::path project = base / j.value("project", "");
+            auto s = openProject(project.string());
+            if (!s.ok()) return fail(s.error());
+            render::ExportOptions options;
+            options.output = base / j.value("output", "");
+            if (j.contains("preset")) {
+                const render::ExportPreset* preset = render::findPreset(presets, j.at("preset").get<std::string>());
+                if (!preset) return usageError("unknown preset '" + j.at("preset").get<std::string>() + "'");
+                options.preset = *preset;
+            }
+            options.inFrame = j.value("from", FrameIndex{0});
+            options.outFrame = j.value("to", FrameIndex{0});
+            queue.add(s.value()->project(), s.value()->timeline().id, options, j.value("name", ""));
+            sessions.push_back(std::move(s.value()));
+        }
+        if (sessions.empty()) return usageError("the queue file has no jobs");
+        queue.waitIdle();
+        int failed = 0;
+        for (const auto& job : queue.jobs()) {
+            std::cout << render::RenderQueue::toString(job.state) << "  " << job.name << "  " << job.message << "\n";
+            failed += job.state != render::RenderQueue::State::Done;
+        }
+        std::cout << (queue.jobs().size() - static_cast<std::size_t>(failed)) << "/" << queue.jobs().size() << " jobs done\n";
+        return failed == 0 ? 0 : 1;
     }};
 
     commands["render-frame"] = {3, [&](const cli::Args&) {

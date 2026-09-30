@@ -107,27 +107,37 @@ Status FrameCompositor::drawLayer(FloatFrame& canvas, const Layer& l, const Time
     const int dw = std::max(2, static_cast<int>(std::lround(l.sourceWidth * decodeScale)));
     const int dh = std::max(2, static_cast<int>(std::lround(l.sourceHeight * decodeScale)));
 
+    // Sources deeper than 8 bits are decoded at 16 bits so their precision reaches the float pipeline.
+    const bool deep = l.media && l.media->info.bitDepth > 8;
     VideoFrame image;
+    VideoFrame16 deepImage;
     if (!l.offline) {
         auto decoder = pool_.video(l.clip->id, l.media->path);
         if (decoder.ok()) {
             // Sample an eighth of a frame into the display interval so rounding never lands on the previous frame.
-            const double seconds = framesToSeconds(l.clip->toSource(frame), timeline.frameRate) +
-                                   0.5 / std::max(1.0, timeline.frameRate.toDouble() * 4);
-            auto picture = decoder.value()->frameAt(std::max(0.0, seconds), dw, dh);
-            if (!picture.ok()) return picture.error();
-            image = std::move(picture.value());
+            const double seconds = std::max(0.0, framesToSeconds(l.clip->toSource(frame), timeline.frameRate) +
+                                                     0.5 / std::max(1.0, timeline.frameRate.toDouble() * 4));
+            if (deep) {
+                auto picture = decoder.value()->frameAt16(seconds, dw, dh);
+                if (!picture.ok()) return picture.error();
+                deepImage = std::move(picture.value());
+            } else {
+                auto picture = decoder.value()->frameAt(seconds, dw, dh);
+                if (!picture.ok()) return picture.error();
+                image = std::move(picture.value());
+            }
         } else {
             UP_LOG_WARN(log::sub::Render, decoder.error().message);
         }
     }
     FloatFrame layer;
-    if (image.empty()) {
+    if (image.empty() && deepImage.empty()) {
         layer = FloatFrame(dw, dh);  // offline placeholder, in the timeline space
         layer.fill(kOfflineColor[0] / 255.0f, kOfflineColor[1] / 255.0f, kOfflineColor[2] / 255.0f);
     } else {
         // Into the timeline colour space, then grade there, before transform and compositing.
-        layer = ColorConversion(mediaColorSpace(*l.media), timeline.colorSpace).convert(image);
+        const ColorConversion toTimeline(mediaColorSpace(*l.media), timeline.colorSpace);
+        layer = deep ? toTimeline.convert(deepImage) : toTimeline.convert(image);
         if (!timeline.gradesBypassed && !l.clip->gradeBypass && !l.clip->grade.isIdentity()) {
             applyGrade(layer, evaluateGrade(l.clip->grade, l.clip->toSource(frame)), l.clip->grade.curves,
                        lut(l.clip->grade.lut), timeline.colorSpace.transfer);
@@ -148,6 +158,12 @@ Status FrameCompositor::drawLayer(FloatFrame& canvas, const Layer& l, const Time
 }
 
 Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex frame, int outWidth, int outHeight) {
+    auto picture = renderFloat(timeline, frame, outWidth, outHeight);
+    if (!picture.ok()) return picture.error();
+    return toVideoFrame(picture.value());
+}
+
+Result<FloatFrame> FrameCompositor::renderFloat(const Timeline& timeline, FrameIndex frame, int outWidth, int outHeight) {
     if (outWidth <= 0 || outHeight <= 0) {
         outWidth = timeline.width;
         outHeight = timeline.height;
@@ -207,10 +223,10 @@ Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex 
         }
         mix(canvas, withOutgoing, withIncoming, transitions::videoWeights(region.kind, plan.frame.progress), black);
     }
-    // Output transform, then the output LUT, then the one and only quantisation.
+    // Output transform, then the output LUT; the caller quantises (8 or 16 bits).
     ColorConversion(timeline.colorSpace, timeline.outputSpace()).apply(canvas);
     if (const Lut* output = lut(timeline.outputLut)) applyLut(canvas, *output);
-    return toVideoFrame(canvas);
+    return canvas;
 }
 
 const Lut* FrameCompositor::lut(const std::optional<LutRef>& ref) {

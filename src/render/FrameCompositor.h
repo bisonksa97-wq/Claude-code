@@ -39,6 +39,9 @@ public:
     // Renders frame `frame` at outWidth x outHeight (0 = the timeline's resolution).
     // Positions are in timeline pixels and scale with the output size.
     Result<VideoFrame> render(const Timeline& timeline, FrameIndex frame, int outWidth = 0, int outHeight = 0);
+    // The same picture before quantisation (output space, unclamped float), for
+    // high-bit-depth exports.
+    Result<FloatFrame> renderFloat(const Timeline& timeline, FrameIndex frame, int outWidth = 0, int outHeight = 0);
 
     static constexpr uint8_t kOfflineColor[3] = {140, 20, 40};
 

@@ -23,10 +23,12 @@ up_add_test(unit_tests
     unit/ThreePointEditTest.cpp
     unit/TimelineOpsTest.cpp
     unit/TransitionsTest.cpp
+    unit/PresetsTest.cpp
     unit/ProjectFormatTest.cpp)
 
 up_add_test(integration_tests
     integration/CodecTest.cpp
+    integration/DeliveryTest.cpp
     integration/MediaAssetsTest.cpp
     integration/PlaybackTest.cpp
     integration/SessionTest.cpp

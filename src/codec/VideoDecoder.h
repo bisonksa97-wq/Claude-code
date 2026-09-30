@@ -28,6 +28,8 @@ public:
     // Decodes the frame at `seconds` and converts it to RGBA at outWidth x outHeight
     // (0 = native size).
     Result<VideoFrame> frameAt(double seconds, int outWidth = 0, int outHeight = 0);
+    // The same, at 16 bits per component, for sources deeper than 8 bits.
+    Result<VideoFrame16> frameAt16(double seconds, int outWidth = 0, int outHeight = 0);
 
 private:
     struct Impl;

@@ -41,16 +41,21 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ✅ Color panel with balance wheels, copy/paste/reset grade; scopes (waveform, parade, vectorscope, histogram); CLI `grade`/`scopes` (session 10)
 - ✅ Curves (master/RGB, hue vs hue/sat, lum vs sat) with an editor, `.cube` LUTs per clip and on the output, relinking, bypass (clip and timeline) and grade versions, format v8 (session 11)
 - ✅ Colour management: media/timeline/output colour spaces (incl. PQ, HLG, LogC3, S-Log3), float working pipeline, tagged exports, correct YUV matrices, viewer clipping/false-colour overlays, format v9 (session 12)
-- ☐ OCIO/ACES configs, tone and gamut mapping, an HDR display path, high-bit-depth decode/encode
+- ✅ High-bit-depth decode/encode (16-bit decode of deep sources; 10/16-bit presets) and HDR10 static metadata (session 13)
+- ☐ OCIO/ACES configs, tone and gamut mapping, an HDR display path
 - ☐ Qualifiers, power windows, tracking, node graph; scopes on a worker thread / GPU
+
+## Delivery (Phase 12, started early) ◐
+- ✅ Export presets (built-in and user JSON), Export dialog, background render queue, ProRes/HEVC 10-bit/FFV1/WAV/PNG sequences, CLI `presets`, `export --preset`, `render-queue` (session 13)
+- ☐ DNxHR and ProRes XQ, loudness (EBU R128 / ATSC A/85) measurement and normalisation, captions/subtitles, audio stems, burn-ins, DCP/IMF
 
 ## Phases 6–15
 Multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Delivery, part 1: high-bit-depth I/O, export presets and a render queue.**
-1. High-bit-depth decode: swscale to 16-bit RGBA (or float) instead of RGBA8, so 10/12-bit and log/HDR sources reach the float pipeline intact; golden tests on 10-bit synthetic media.
-2. 10-bit encode: HEVC Main10 (libx265) and ProRes 422 HQ/4444 (prores_ks) when the encoders are available, with honest fallbacks and readable errors when they are not; HDR metadata (mastering display, MaxCLL/MaxFALL) for PQ exports.
-3. An export dialog with presets (H.264 web, HEVC 10-bit, ProRes master, audio-only WAV, image sequence) stored as JSON; a background render queue with progress, cancel and per-job logs.
-4. CLI: `export --preset`, `presets list`, `queue` commands.
-5. Tests: bit-depth round trips (10-bit ramp keeps > 256 levels), preset validation, encoder fallback, queue ordering and cancellation, metadata written and probed back.
+**Performance: proxies and a playback frame cache (Phase 1/3, capabilities 47–48).**
+1. Proxy generation as background jobs: per-media proxies (e.g. 1/2 or 1/4 resolution, ProRes 422 Proxy or H.264 intra), stored next to the cache and keyed like thumbnails. Progress appears in the media pool.
+2. A proxy switch (per project, and per viewer) that the playback engine and viewer honour. Export always uses the originals, which a test verifies.
+3. A RAM frame cache for the viewer (LRU by timeline, frame and edit revision) so scrubbing over rendered frames is instant; invalidated by edits.
+4. Measurements: dropped frames and render time per frame for 1080p and 4K timelines with and without proxies, recorded in the docs.
+5. Tests: proxy creation and relinking, originals used for export, cache hits and invalidation after edits, dropped-frame counts with a fake clock.

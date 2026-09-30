@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <vector>
 
 extern "C" {
@@ -179,26 +180,33 @@ namespace {
 
 // Y, Cb, Cr at the centre of the first decoded frame, read straight from libav (no
 // RGB conversion), so the encoder's matrix is checked independently of our decoder.
-std::array<int, 3> firstFrameYuv(const std::filesystem::path& path) {
+std::array<int, 3> frameYuv(const std::filesystem::path& path, int index = 0) {
     AVFormatContext* fmt = nullptr;
     EXPECT_GE(avformat_open_input(&fmt, path.string().c_str(), nullptr, nullptr), 0);
     avformat_find_stream_info(fmt, nullptr);
-    const int index = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    const AVCodec* codec = avcodec_find_decoder(fmt->streams[index]->codecpar->codec_id);
+    const int stream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    const AVCodec* codec = avcodec_find_decoder(fmt->streams[stream]->codecpar->codec_id);
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(ctx, fmt->streams[index]->codecpar);
+    avcodec_parameters_to_context(ctx, fmt->streams[stream]->codecpar);
     avcodec_open2(ctx, codec, nullptr);
     AVPacket* packet = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
     std::array<int, 3> yuv{-1, -1, -1};
     bool done = false;
+    int seen = 0;
+    auto receive = [&] {
+        while (!done && avcodec_receive_frame(ctx, frame) >= 0) {
+            if (seen++ == index) done = true;
+            else av_frame_unref(frame);
+        }
+    };
     while (!done && av_read_frame(fmt, packet) >= 0) {
-        if (packet->stream_index == index && avcodec_send_packet(ctx, packet) >= 0 && avcodec_receive_frame(ctx, frame) >= 0) done = true;
+        if (packet->stream_index == stream && avcodec_send_packet(ctx, packet) >= 0) receive();
         av_packet_unref(packet);
     }
     if (!done) {
         avcodec_send_packet(ctx, nullptr);
-        done = avcodec_receive_frame(ctx, frame) >= 0;
+        receive();
     }
     if (done) {
         const int x = frame->width / 2, y = frame->height / 2;
@@ -228,18 +236,34 @@ TEST(CodecColor, YuvMatrixAndTagsFollowTheSettings) {
         s.colorTransfer = transfer;
         auto writer = MediaWriter::open(dir / name, s);
         EXPECT_TRUE(writer.ok());
-        for (int i = 0; i < 5; ++i) EXPECT_TRUE(writer.value()->writeVideo(red).ok());
+        for (int i = 0; i < 12; ++i) EXPECT_TRUE(writer.value()->writeVideo(red).ok());
         EXPECT_TRUE(writer.value()->finish().ok());
         return dir / name;
     };
     // BT.709 limited range: red = Y 63, Cb 102, Cr 240 (BT.601 would give Y 81, Cb 90).
     const auto hd = encode("709.mp4", "bt709", "bt709", "bt709");
-    const auto yuv709 = firstFrameYuv(hd);
+    const auto yuv709 = frameYuv(hd);
     EXPECT_NEAR(yuv709[0], 63, 2);
     EXPECT_NEAR(yuv709[1], 102, 2);
     EXPECT_NEAR(yuv709[2], 240, 2);
+    // Every frame, not just the first: swscale may recreate its context between frames,
+    // which once silently reset later frames to BT.601 (Y 81) on both sides.
+    for (int n : {1, 4, 11}) {
+        const auto later = frameYuv(hd, n);
+        EXPECT_NEAR(later[0], 63, 2) << "frame " << n;
+        EXPECT_NEAR(later[1], 102, 2) << "frame " << n;
+    }
+    {
+        auto decoder = VideoDecoder::open(hd);
+        ASSERT_TRUE(decoder.ok());
+        for (double t : {0.0, 0.1, 0.2, 0.3, 0.44}) {
+            const auto rgb = test::averageColor(decoder.value()->frameAt(t).value());
+            EXPECT_NEAR(rgb.r, 255, 4) << "at " << t;
+            EXPECT_NEAR(rgb.g, 0, 4) << "at " << t;
+        }
+    }
     const auto sd = encode("601.mp4", "smpte170m", "smpte170m", "smpte170m");
-    const auto yuv601 = firstFrameYuv(sd);
+    const auto yuv601 = frameYuv(sd);
     EXPECT_NEAR(yuv601[0], 81, 2);
     EXPECT_NEAR(yuv601[1], 90, 2);
     // Tags are written, and our decoder uses them to get the RGB back either way.
@@ -262,4 +286,159 @@ TEST(CodecColor, YuvMatrixAndTagsFollowTheSettings) {
     bad.audio = false;
     bad.colorTransfer = "not-a-transfer";
     EXPECT_FALSE(MediaWriter::open(dir / "bad.mp4", bad).ok());
+}
+
+namespace {
+
+// A horizontal ramp over a narrow band (0.40..0.44 of full scale): 8 bits can only
+// show ~11 distinct levels of it, 10 bits ~41, 16 bits every column.
+VideoFrame16 narrowRamp(int width, int height) {
+    VideoFrame16 f(width, height);
+    for (int y = 0; y < height; ++y) {
+        uint16_t* row = f.row(y);
+        for (int x = 0; x < width; ++x) {
+            const auto v = static_cast<uint16_t>(std::lround((0.40 + 0.04 * x / (width - 1)) * 65535.0));
+            row[x * 4] = row[x * 4 + 1] = row[x * 4 + 2] = v;
+            row[x * 4 + 3] = 65535;
+        }
+    }
+    return f;
+}
+
+std::size_t distinctLevels(const VideoFrame16& f, int shift) {
+    std::set<int> levels;
+    for (int x = 0; x < f.width; ++x) levels.insert(f.row(f.height / 2)[x * 4] >> shift);
+    return levels.size();
+}
+
+EncodeSettings videoOnly(int w, int h, const std::string& codec, const std::string& pixelFormat) {
+    EncodeSettings s;
+    s.width = w;
+    s.height = h;
+    s.audio = false;
+    s.videoCodec = codec;
+    s.pixelFormat = pixelFormat;
+    return s;
+}
+
+}  // namespace
+
+TEST(CodecDepth, TenBitLosslessRoundTrip) {
+    if (!encoderAvailable("ffv1")) GTEST_SKIP() << "ffv1 encoder not available";
+    test::TempDir dir;
+    const VideoFrame16 ramp = narrowRamp(512, 16);
+    auto writer = MediaWriter::open(dir / "ramp.mkv", videoOnly(512, 16, "ffv1", "gbrp10le"));
+    ASSERT_TRUE(writer.ok()) << writer.error().toString();
+    for (int i = 0; i < 3; ++i) ASSERT_TRUE(writer.value()->writeVideo(ramp).ok());
+    ASSERT_TRUE(writer.value()->finish().ok());
+    auto info = probeMedia(dir / "ramp.mkv");
+    ASSERT_TRUE(info.ok());
+    EXPECT_EQ(info.value().bitDepth, 10);
+    auto decoder = VideoDecoder::open(dir / "ramp.mkv");
+    ASSERT_TRUE(decoder.ok());
+    const VideoFrame16 deep = decoder.value()->frameAt16(0.0).value();
+    const VideoFrame shallow = decoder.value()->frameAt(0.0).value();
+    // Every value comes back within one 10-bit step (swscale truncates between 16 and
+    // 10 bits rather than rounding), and the ramp keeps ~41 levels.
+    for (int x = 0; x < 512; ++x) EXPECT_NEAR(deep.row(8)[x * 4], ramp.row(8)[x * 4], 65535.0 / 1023 + 1);
+    EXPECT_GE(distinctLevels(deep, 6), 40u);
+    std::set<int> eightBit;
+    for (int x = 0; x < 512; ++x) eightBit.insert(shallow.row(8)[x * 4]);
+    EXPECT_LE(eightBit.size(), 12u);
+}
+
+TEST(CodecDepth, HevcMain10WithHdr10Metadata) {
+    if (!encoderAvailable("libx265")) GTEST_SKIP() << "libx265 not available";
+    test::TempDir dir;
+    EncodeSettings s = videoOnly(128, 64, "libx265", "yuv420p10le");
+    s.colorPrimaries = "bt2020";
+    s.colorTransfer = "smpte2084";
+    s.colorMatrix = "bt2020nc";
+    s.codecTag = "hvc1";
+    s.crf = 12;
+    HdrMetadata hdr;
+    hdr.maxLuminance = 1000;
+    hdr.minLuminance = 0.005;
+    hdr.maxCll = 800;
+    hdr.maxFall = 300;
+    s.hdr = hdr;
+    auto writer = MediaWriter::open(dir / "hdr.mp4", s);
+    ASSERT_TRUE(writer.ok()) << writer.error().toString();
+    const VideoFrame16 ramp = narrowRamp(128, 64);
+    for (int i = 0; i < 5; ++i) ASSERT_TRUE(writer.value()->writeVideo(ramp).ok());
+    ASSERT_TRUE(writer.value()->finish().ok());
+    auto info = probeMedia(dir / "hdr.mp4");
+    ASSERT_TRUE(info.ok());
+    EXPECT_EQ(info.value().videoCodec, "hevc");
+    EXPECT_EQ(info.value().bitDepth, 10);
+    EXPECT_EQ(info.value().pixelFormat, "yuv420p10le");
+    EXPECT_EQ(info.value().colorTransfer, "smpte2084");
+    EXPECT_NEAR(info.value().masteringMaxLuminance, 1000, 1e-6);
+    EXPECT_NEAR(info.value().masteringMinLuminance, 0.005, 1e-6);
+    EXPECT_EQ(info.value().maxCll, 800);
+    EXPECT_EQ(info.value().maxFall, 300);
+    auto decoder = VideoDecoder::open(dir / "hdr.mp4");
+    ASSERT_TRUE(decoder.ok());
+    EXPECT_GE(distinctLevels(decoder.value()->frameAt16(0.0).value(), 6), 25u);  // lossy, but well beyond 8 bits
+}
+
+TEST(CodecDepth, ProResPcmWavAndImageSequences) {
+    test::TempDir dir;
+    VideoFrame red(64, 32);
+    red.fill(200, 40, 40);
+    if (encoderAvailable("prores_ks")) {
+        EncodeSettings s = videoOnly(64, 32, "prores_ks", "yuv422p10le");
+        s.codecOptions["profile"] = "3";  // 422 HQ
+        s.audio = true;
+        s.audioCodec = "pcm_s24le";
+        auto writer = MediaWriter::open(dir / "master.mov", s);
+        ASSERT_TRUE(writer.ok()) << writer.error().toString();
+        std::vector<float> tone(1920 * 2);
+        for (std::size_t i = 0; i < tone.size(); ++i) tone[i] = 0.5f * static_cast<float>(std::sin(static_cast<double>(i / 2) * 0.05));
+        for (int i = 0; i < 5; ++i) {
+            ASSERT_TRUE(writer.value()->writeVideo(red).ok());
+            ASSERT_TRUE(writer.value()->writeAudio(tone.data(), 1920).ok());
+        }
+        ASSERT_TRUE(writer.value()->finish().ok());
+        auto info = probeMedia(dir / "master.mov");
+        ASSERT_TRUE(info.ok());
+        EXPECT_EQ(info.value().videoCodec, "prores");
+        EXPECT_EQ(info.value().pixelFormat, "yuv422p10le");
+        EXPECT_EQ(info.value().audioCodec, "pcm_s24le");
+        const auto rgb = test::averageColor(VideoDecoder::open(dir / "master.mov").value()->frameAt(0.0).value());
+        EXPECT_NEAR(rgb.r, 200, 3);
+        EXPECT_NEAR(rgb.g, 40, 3);
+    }
+    // Audio-only WAV at 24 bits: the samples survive.
+    EncodeSettings wav;
+    wav.video = false;
+    wav.audioCodec = "pcm_s24le";
+    auto writer = MediaWriter::open(dir / "mix.wav", wav);
+    ASSERT_TRUE(writer.ok()) << writer.error().toString();
+    std::vector<float> ramp(4800 * 2);
+    for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<float>(i % 200) / 200.0f - 0.5f;
+    ASSERT_TRUE(writer.value()->writeAudio(ramp.data(), 4800).ok());
+    ASSERT_TRUE(writer.value()->finish().ok());
+    auto audio = AudioDecoder::open(dir / "mix.wav", 48000, 2);
+    ASSERT_TRUE(audio.ok());
+    std::vector<float> back(4800 * 2);
+    ASSERT_TRUE(audio.value()->read(0, 4800, back.data()).ok());
+    for (std::size_t i = 0; i < 2000; ++i) EXPECT_NEAR(back[i], ramp[i], 1e-5);
+    EXPECT_EQ(probeMedia(dir / "mix.wav").value().audioCodec, "pcm_s24le");
+    // PNG sequence (16-bit RGB): one file per frame.
+    std::filesystem::create_directories(dir / "seq");
+    auto png = MediaWriter::open(dir / "seq" / "frame_%06d.png", videoOnly(64, 32, "png", "rgb48be"));
+    ASSERT_TRUE(png.ok()) << png.error().toString();
+    const VideoFrame16 deep = narrowRamp(64, 32);
+    for (int i = 0; i < 3; ++i) ASSERT_TRUE(png.value()->writeVideo(deep).ok());
+    ASSERT_TRUE(png.value()->finish().ok());
+    EXPECT_TRUE(std::filesystem::exists(dir / "seq" / "frame_000001.png"));
+    EXPECT_TRUE(std::filesystem::exists(dir / "seq" / "frame_000003.png"));
+    auto still = probeMedia(dir / "seq" / "frame_000002.png");
+    ASSERT_TRUE(still.ok());
+    EXPECT_EQ(still.value().bitDepth, 16);
+    // Pixel formats the encoder cannot write are refused clearly.
+    auto bad = MediaWriter::open(dir / "bad.mp4", videoOnly(64, 32, "libx264", "yuv422p16le"));
+    ASSERT_FALSE(bad.ok());
+    EXPECT_NE(bad.error().message.find("cannot write"), std::string::npos);
 }

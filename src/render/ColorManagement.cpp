@@ -144,6 +144,11 @@ Matrix3 inverse(const Matrix3& m) {
 
 }  // namespace
 
+std::array<std::array<double, 2>, 4> primariesChromaticities(Primaries primaries) {
+    const Chromaticities c = chromaticitiesOf(primaries);
+    return {{{c.rx, c.ry}, {c.gx, c.gy}, {c.bx, c.by}, {kD65x, kD65y}}};
+}
+
 Matrix3 rgbToXyz(Primaries primaries) {
     const Chromaticities c = chromaticitiesOf(primaries);
     auto column = [](double x, double y) { return std::array<double, 3>{x / y, 1.0, (1.0 - x - y) / y}; };
@@ -203,6 +208,12 @@ void ColorConversion::apply(FloatFrame& frame) const {
             }
         }
     });
+}
+
+FloatFrame ColorConversion::convert(const VideoFrame16& frame) const {
+    FloatFrame out = toFloatFrame(frame);
+    apply(out);
+    return out;
 }
 
 FloatFrame ColorConversion::convert(const VideoFrame& frame) const {

@@ -4,6 +4,7 @@
 
 #include "core/Log.h"
 #include "render/AudioMixer.h"
+#include "render/ColorManagement.h"
 #include "render/FrameCompositor.h"
 
 namespace up::render {
@@ -34,31 +35,81 @@ Status ExportJob::run(const ProgressFn& progress) {
     }
 
     EncodeSettings settings;
+    if (options_.preset) {
+        UP_TRY(validatePreset(*options_.preset));
+        const std::string missing = presetUnavailableReason(*options_.preset);
+        if (!missing.empty()) {
+            return makeError(ErrorCode::NotFound, "export", "The preset '" + options_.preset->name + "' cannot be used: " + missing + ".",
+                             "Choose another preset, or install an FFmpeg build that includes that encoder.");
+        }
+        settings = encodeSettingsFor(*options_.preset);
+    } else {
+        settings.videoCodec = options_.videoCodec;
+        settings.crf = options_.crf;
+        settings.videoBitrate = options_.videoBitrate;
+    }
     settings.width = timeline->width;
     settings.height = timeline->height;
     settings.frameRate = timeline->frameRate;
-    settings.videoCodec = options_.videoCodec;
-    const ColorTags tags = colorTagsFor(timeline->outputSpace());  // what the file says about its colour
+    const ColorSpace outputSpace = timeline->outputSpace();
+    const ColorTags tags = colorTagsFor(outputSpace);  // what the file says about its colour
     settings.colorPrimaries = tags.primaries;
     settings.colorTransfer = tags.transfer;
     settings.colorMatrix = tags.matrix;
-    settings.crf = options_.crf;
-    settings.videoBitrate = options_.videoBitrate;
-    settings.audio = options_.includeAudio;
+    settings.audio = settings.audio && options_.includeAudio;
     settings.sampleRate = timeline->sampleRate;
     settings.channels = AudioMixer::kChannels;
+    if (!settings.video && !settings.audio) {
+        return makeError(ErrorCode::InvalidArgument, "export", "This export would contain neither video nor audio.",
+                         "Include audio, or choose a preset with video.");
+    }
+    if (settings.video && isHdr(outputSpace.transfer)) {
+        // HDR10 static metadata describing the mastering display (the output primaries).
+        const auto xy = primariesChromaticities(outputSpace.primaries);
+        HdrMetadata hdr;
+        hdr.red = xy[0];
+        hdr.green = xy[1];
+        hdr.blue = xy[2];
+        hdr.white = xy[3];
+        hdr.maxLuminance = options_.masteringMaxLuminance;
+        hdr.minLuminance = options_.masteringMinLuminance;
+        hdr.maxCll = options_.maxCll;
+        hdr.maxFall = options_.maxFall;
+        settings.hdr = hdr;
+    }
+    const bool deep = settings.video && options_.preset && options_.preset->bitDepth() > 8;
+    const bool sequence = options_.preset && options_.preset->imageSequence();
 
     // A missing LUT would silently change the delivered colours, so refuse up front.
     if (Status luts = checkTimelineLuts(*timeline); !luts.ok()) return luts;
     if (timeline->gradesBypassed)
         UP_LOG_WARN(log::sub::Render, "Exporting with all clip grades bypassed (Color > Bypass All Grades).");
 
-    // Write to a temporary file so a cancelled or failed export never leaves a truncated output behind.
-    // The extension is kept so FFmpeg still picks the right container.
+    // Write to a temporary file (or folder, for image sequences) so a cancelled or failed
+    // export never leaves a truncated output behind. File extensions are kept so FFmpeg
+    // still picks the right container.
+    std::error_code ec;
     const std::filesystem::path temp = options_.output.parent_path() /
-        (options_.output.stem().string() + ".partial" + options_.output.extension().string());
-    auto writer = MediaWriter::open(temp, settings);
-    if (!writer.ok()) return writer.error();
+        (options_.output.stem().string() + ".partial" + (sequence ? std::string() : options_.output.extension().string()));
+    std::filesystem::path writerPath = temp;
+    if (sequence) {
+        if (std::filesystem::exists(options_.output, ec)) {
+            return makeError(ErrorCode::Conflict, "export", "The folder '" + options_.output.filename().string() + "' already exists.",
+                             "Image sequences are written into a new folder; choose another name or remove the old one.");
+        }
+        std::filesystem::remove_all(temp, ec);
+        std::filesystem::create_directories(temp, ec);
+        if (ec) {
+            return makeError(ErrorCode::IoError, "export", "The folder for the image sequence could not be created.",
+                             "Check write permissions.", ec.message());
+        }
+        writerPath = temp / (options_.output.filename().string() + "_%06d.png");
+    }
+    auto writer = MediaWriter::open(writerPath, settings);
+    if (!writer.ok()) {
+        if (sequence) std::filesystem::remove_all(temp, ec);
+        return writer.error();
+    }
 
     FrameCompositor compositor(resolverFor(project_));
     AudioMixer mixer(resolverFor(project_));
@@ -67,9 +118,8 @@ Status ExportJob::run(const ProgressFn& progress) {
     const auto started = std::chrono::steady_clock::now();
 
     auto fail = [&](Status s) {
-        std::error_code ec;
         writer.value().reset();
-        std::filesystem::remove(temp, ec);
+        std::filesystem::remove_all(temp, ec);
         return s;
     };
 
@@ -78,10 +128,19 @@ Status ExportJob::run(const ProgressFn& progress) {
             return fail(makeError(ErrorCode::Cancelled, "render", "The export was cancelled.",
                                   "Start the export again when ready."));
         }
-        auto frame = compositor.render(*timeline, f);
-        if (!frame.ok()) return fail(frame.error());
-        Status s = writer.value()->writeVideo(frame.value());
-        if (!s.ok()) return fail(s);
+        Status s = Status::success();
+        if (settings.video) {
+            if (deep) {
+                auto frame = compositor.renderFloat(*timeline, f);
+                if (!frame.ok()) return fail(frame.error());
+                s = writer.value()->writeVideo(toVideoFrame16(frame.value()));
+            } else {
+                auto frame = compositor.render(*timeline, f);
+                if (!frame.ok()) return fail(frame.error());
+                s = writer.value()->writeVideo(frame.value());
+            }
+            if (!s.ok()) return fail(s);
+        }
         if (settings.audio) {
             const int64_t s0 = frameToSample(f, timeline->frameRate, timeline->sampleRate);
             const int64_t s1 = frameToSample(f + 1, timeline->frameRate, timeline->sampleRate);
@@ -97,7 +156,6 @@ Status ExportJob::run(const ProgressFn& progress) {
     if (!s.ok()) return fail(s);
     writer.value().reset();
 
-    std::error_code ec;
     std::filesystem::rename(temp, options_.output, ec);
     if (ec) {
         return makeError(ErrorCode::IoError, "render", "The export finished but could not be moved into place.",

@@ -15,6 +15,9 @@ double encodeTransfer(Transfer transfer, double linear);   // linear -> encoded
 
 using Matrix3 = std::array<std::array<double, 3>, 3>;
 
+// CIE 1931 xy of the red, green and blue primaries and the (D65) white point.
+std::array<std::array<double, 2>, 4> primariesChromaticities(Primaries primaries);
+
 // RGB -> CIE XYZ for the primaries (D65 white, Y of white = 1).
 Matrix3 rgbToXyz(Primaries primaries);
 // Linear RGB in `from` primaries -> linear RGB in `to` primaries (all spaces share D65,
@@ -33,6 +36,7 @@ public:
     void apply(FloatFrame& frame) const;
     // 8-bit input: decoding runs through an exact 256-entry table.
     FloatFrame convert(const VideoFrame& frame) const;
+    FloatFrame convert(const VideoFrame16& frame) const;
 
 private:
     std::array<float, 3> fromLinear(double r, double g, double b) const;

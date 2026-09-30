@@ -6,9 +6,11 @@ up_add_module(up_render
         ColorManagement.cpp
         Compositing.cpp
         ExportJob.cpp
+        ExportPresets.cpp
         FrameCompositor.cpp
         Lut.cpp
         MediaSource.cpp
+        RenderQueue.cpp
         Scopes.cpp
         ViewerOverlay.cpp
     DEPS up_core up_audio up_timeline up_project up_codec)

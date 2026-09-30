@@ -14,7 +14,7 @@ Dependencies only point downward.
 | project | `up_project` | Project model (media pool, bins, timelines), `.uproj` serializer and migrations | core, timeline |
 | codec | `up_codec` | FFmpeg wrappers: probe, `VideoDecoder`, `AudioDecoder`, `MediaWriter` | core, FFmpeg |
 | media | `up_media` | Import, offline detection, relink validation, search, synthetic test media, thumbnail/waveform generators and formats | core, project, codec |
-| render | `up_render` | `FrameCompositor`, float working frames, colour management (`ColorConversion`), colour grading (`applyGrade`, curves, `.cube` LUTs with `LutCache`), `computeScopes`, viewer overlays, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
+| render | `up_render` | `FrameCompositor`, float working frames, colour management (`ColorConversion`), colour grading (`applyGrade`, curves, `.cube` LUTs with `LutCache`), `computeScopes`, viewer overlays, export presets and the `RenderQueue`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
 | playback | `up_playback` | `PlaybackEngine` (real-time A/V playback), `AudioOutput`/`Clock` interfaces, `SampleFifo` | core, project, render |
 | app | `up_app` | `EditorSession` application services and undoable project commands; `MediaAssets` (async thumbnails and waveforms); `makeSourceProject` (one-clip projects for the source monitor) | all of the above |
 | cli | `ultimatepost` | Command-line front end | app |

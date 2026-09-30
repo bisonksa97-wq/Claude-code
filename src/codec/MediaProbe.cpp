@@ -1,9 +1,11 @@
 #include "codec/MediaProbe.h"
 
+#include <algorithm>
 #include <mutex>
 
 extern "C" {
 #include <libavutil/log.h>
+#include <libavutil/mastering_display_metadata.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
@@ -30,6 +32,19 @@ int swsMatrixFor(AVColorSpace space, int height) {
         case AVCOL_SPC_BT470BG: return SWS_CS_ITU601;
         default: return height >= 720 ? SWS_CS_ITU709 : SWS_CS_ITU601;
     }
+}
+
+void ensureSwsColorspace(SwsContext* ctx, int matrix, int srcFullRange, int dstFullRange) {
+    int* inv = nullptr;
+    int* table = nullptr;
+    int srcRange = -1, dstRange = -1, brightness = 0, contrast = 0, saturation = 0;
+    const int* wanted = sws_getCoefficients(matrix);
+    if (sws_getColorspaceDetails(ctx, &inv, &srcRange, &table, &dstRange, &brightness, &contrast, &saturation) >= 0 &&
+        srcRange == srcFullRange && dstRange == dstFullRange && inv && table && std::equal(wanted, wanted + 4, inv) &&
+        std::equal(wanted, wanted + 4, table)) {
+        return;  // already converting with these settings
+    }
+    sws_setColorspaceDetails(ctx, wanted, srcFullRange, wanted, dstFullRange, 0, 1 << 16, 1 << 16);
 }
 
 int swsMatrixForName(const std::string& name) {
@@ -80,11 +95,27 @@ Result<MediaInfo> probeMedia(const std::filesystem::path& path) {
             const AVRational fr = s->avg_frame_rate.num > 0 ? s->avg_frame_rate : s->r_frame_rate;
             info.frameRate = Rational(fr.num, fr.den > 0 ? fr.den : 1);
             if (const char* pf = av_get_pix_fmt_name(static_cast<AVPixelFormat>(par->format))) info.pixelFormat = pf;
+            if (const AVPixFmtDescriptor* d = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(par->format)))
+                info.bitDepth = d->comp[0].depth;
             auto tag = [](const char* name, bool specified) { return specified && name ? std::string(name) : std::string(); };
             info.colorPrimaries = tag(av_color_primaries_name(par->color_primaries), par->color_primaries != AVCOL_PRI_UNSPECIFIED);
             info.colorTransfer = tag(av_color_transfer_name(par->color_trc), par->color_trc != AVCOL_TRC_UNSPECIFIED);
             info.colorMatrix = tag(av_color_space_name(par->color_space), par->color_space != AVCOL_SPC_UNSPECIFIED);
             info.colorRange = tag(av_color_range_name(par->color_range), par->color_range != AVCOL_RANGE_UNSPECIFIED);
+            if (const AVPacketSideData* sd = av_packet_side_data_get(par->coded_side_data, par->nb_coded_side_data,
+                                                                     AV_PKT_DATA_MASTERING_DISPLAY_METADATA)) {
+                const auto* m = reinterpret_cast<const AVMasteringDisplayMetadata*>(sd->data);
+                if (m->has_luminance) {
+                    info.masteringMaxLuminance = av_q2d(m->max_luminance);
+                    info.masteringMinLuminance = av_q2d(m->min_luminance);
+                }
+            }
+            if (const AVPacketSideData* sd = av_packet_side_data_get(par->coded_side_data, par->nb_coded_side_data,
+                                                                     AV_PKT_DATA_CONTENT_LIGHT_LEVEL)) {
+                const auto* c = reinterpret_cast<const AVContentLightMetadata*>(sd->data);
+                info.maxCll = static_cast<int>(c->MaxCLL);
+                info.maxFall = static_cast<int>(c->MaxFALL);
+            }
             // Image formats (png, jpeg...) demux as a single frame: treat them as stills.
             const std::string demuxer = info.container;
             info.isStill = demuxer.find("_pipe") != std::string::npos || demuxer == "image2" ||

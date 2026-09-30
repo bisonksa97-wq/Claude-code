@@ -91,4 +91,32 @@ inline VideoFrame toVideoFrame(const FloatFrame& in) {
     return out;
 }
 
+inline FloatFrame toFloatFrame(const VideoFrame16& in) {
+    FloatFrame out(in.width, in.height);
+    parallelRows(in.height, static_cast<std::size_t>(in.width) * 4, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            const uint16_t* src = in.row(y);
+            float* dst = out.row(y);
+            for (int i = 0; i < in.width * 4; ++i) dst[i] = static_cast<float>(src[i]) / 65535.0f;
+        }
+    });
+    return out;
+}
+
+// Clamps to 0..1 and rounds to the nearest 16-bit code (for high-bit-depth exports).
+inline VideoFrame16 toVideoFrame16(const FloatFrame& in) {
+    VideoFrame16 out(in.width, in.height);
+    parallelRows(in.height, static_cast<std::size_t>(in.width) * 4, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            const float* src = in.row(y);
+            uint16_t* dst = out.row(y);
+            for (int i = 0; i < in.width * 4; ++i) {
+                const float v = src[i] > 0.0f ? (src[i] < 1.0f ? src[i] : 1.0f) : 0.0f;  // NaN -> 0
+                dst[i] = static_cast<uint16_t>(v * 65535.0f + 0.5f);
+            }
+        }
+    });
+    return out;
+}
+
 }  // namespace up::render
