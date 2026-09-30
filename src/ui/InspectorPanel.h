@@ -19,7 +19,8 @@ class EditorSession;
 
 namespace up::ui {
 
-// Shows and edits the selected video clip's transform at the program playhead.
+// Shows and edits the selected clip's animatable parameters at the program playhead:
+// transform and opacity for video clips, volume and pan for audio clips.
 // Edits go through EditorSession (undoable): on an animated parameter they set the
 // keyframe at the playhead, otherwise they change the constant value.
 class InspectorPanel : public QWidget {
@@ -28,7 +29,7 @@ public:
     explicit InspectorPanel(QWidget* parent = nullptr);
 
     void setSession(EditorSession* session);
-    // Follows the timeline selection; audio clips resolve to their linked video clip.
+    // Follows the timeline selection.
     void setClip(const std::string& clipId);
     void setPlayhead(FrameIndex frame);
     // Re-reads the model (after any edit or undo).
@@ -45,6 +46,7 @@ signals:
 
 private:
     struct Row {
+        QLabel* label = nullptr;
         QDoubleSpinBox* value = nullptr;
         QToolButton* key = nullptr;
         QToolButton* previous = nullptr;

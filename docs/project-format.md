@@ -1,11 +1,11 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **5**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **6**, `Project::kFormatVersion`).
 
 ```jsonc
 {
   "format": "ultimatepost.project",
-  "formatVersion": 5,
+  "formatVersion": 6,
   "project": {
     "id": "…", "name": "…", "createdAt": "2026-09-29T17:40:00Z", "modifiedAt": "…",
     "settings": { "frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000 },
@@ -33,6 +33,9 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
       "tracks": [ {
           "id": "…", "kind": "video" | "audio", "name": "V1",
           "enabled": true, "locked": false, "muted": false, "solo": false, "gainDb": 0,
+          "pan": 0,                                      // -1 left .. 1 right (audio tracks)
+          "effects": [ { "id": "…", "type": "eq3", "enabled": true,
+                         "params": { "lowGain": 3, "lowFreq": 120 } } ],   // insert chain, in order
           "clips": [ { "id": "…", "mediaId": "…", "name": "…",
                        "start": 0, "duration": 50, "sourceIn": 0, "sourceLength": 50,
                        "linkId": "…", "enabled": true, "gainDb": 0,
@@ -69,6 +72,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 |---|---|---|
 | 1 | First format | – |
 | 2 | Timeline `markIn`/`markOut` and `targets`; media `markIn`/`markOut` | Targets become the first video and first audio track (how v1 placed media); all marks are null. Covered by `ProjectFormat.MigratesVersion1Documents`. |
+| 6 | Track `pan` and `effects`; clip `transform` may hold `volume` (dB) and `pan` | Pan 0 and an empty effect chain on every track. Covered by `ProjectFormat.RoundTripsTrackAudioAndMigratesV5`. Invalid effect parameters in a file are rejected on load. |
 | 5 | Clip `transitionIn` / `transitionOut` | Both null on every clip. Covered by `ProjectFormat.RoundTripsTransitionsAndMigratesV4`. |
 | 4 | Clip `transform` (animatable position, scale, rotation, opacity, crop) | Empty transform (identity) on every clip. Covered by `ProjectFormat.MigratesVersion3Documents`. |
 | 3 | Timeline and clip `markers` | Empty marker lists everywhere. Covered by `ProjectFormat.MigratesVersion2Documents` (and v1 files migrate through both steps). |

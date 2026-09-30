@@ -206,6 +206,11 @@ Status Timeline::validate() const {
     if (!checkMarkers(markers, true)) return fail("invalid or unsorted timeline markers");
     for (const auto& t : tracks) {
         if (!ids.insert(t.id).second) return fail("duplicate track id " + t.id);
+        if (!std::isfinite(t.pan) || t.pan < -1.0 || t.pan > 1.0) return fail("pan out of range on track " + t.name);
+        for (const auto& fx : t.effects) {
+            if (!ids.insert(fx.id).second) return fail("duplicate effect id " + fx.id);
+            if (Status s = audio::validateEffect(fx); !s.ok()) return fail(s.error().message);
+        }
         for (std::size_t i = 0; i < t.clips.size(); ++i) {
             const Clip& c = t.clips[i];
             if (!ids.insert(c.id).second) return fail("duplicate clip id " + c.id);

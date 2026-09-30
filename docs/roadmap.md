@@ -33,14 +33,16 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ✅ Decode/resample, multi-track mix with gain/mute/solo, AAC export
 - ✅ Audio playback in the viewer, audio as the master clock (session 2)
 - ☐ Device selection, output latency compensation, and J/K/L shuttle and variable-speed playback
-- ☐ Pan, fades, clip volume keyframes, mixer panel, EQ/compressor processors
+- ✅ Fades and crossfades (session 8); pan, clip volume/pan keyframes, mixer panel with meters, EQ/compressor/gain inserts (session 9)
+- ☐ Buses, sends and returns; track automation lanes; limiter, gate, de-esser; loudness (LUFS) metering
 
 ## Phases 5–15
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Audio mixing essentials (Phase 4 completion):**
-1. Pan per track and clip, and keyframable clip volume reusing `AnimatedValue` (the fades from session 8 stay as a separate envelope).
-2. A mixer panel with per-track faders, pan, mute/solo, and peak/RMS meters fed from the playback engine (a meter tap in the audio worker, ballistics in the UI).
-3. The first real-time audio processors behind a small `AudioEffect` interface: gain, 3-band EQ (biquads) and a compressor, with a per-track insert chain stored in the project (format v6 with a migration).
-4. Tests: pan law, volume keyframes, biquad responses at known frequencies, compressor gain reduction on synthetic tones, meter values, persistence and migration.
+**Phase 5: colour, part 1: primary correction and scopes.**
+1. A colour-correction model per clip: lift/gamma/gain/offset (RGB and master), contrast with pivot, saturation, temperature/tint. It is animatable like the transform and stored as a clip "grade" (format v7 with a migration).
+2. A CPU grading pass in the compositor after decode and before transform, working in linear-light float with sRGB/Rec.709 transfer handling. This is the reference implementation for a later GPU path.
+3. Scopes on the program monitor: waveform, RGB parade, vectorscope and histogram, computed from the rendered frame on a worker thread.
+4. A Color workspace panel with wheels and sliders for the selected clip, plus copy/paste of grades.
+5. Tests: golden values for each operation on synthetic ramps and colour patches, identity at defaults, scope histograms and vectorscope positions for known colours, persistence and migration.

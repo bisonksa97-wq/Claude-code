@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 8._
+_Last updated: session 9._
 
 ## First vertical slice (§90)
 
@@ -36,7 +36,7 @@ _Last updated: session 8._
 | 8 | 2D compositing | PARTIAL | All video tracks blend bottom-to-top with transforms and opacity (straight-alpha over). No blend modes, masks or node graph. |
 | 9–15 | 3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
-| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; constant-power crossfades and clip fades; stereo mix for playback and export. No pan, EQ, dynamics, automation or buses. |
+| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain and pan, mute/solo, clip gain, keyframable clip volume and pan, constant-power crossfades and fades, per-track insert effects (gain, 3-band EQ, compressor), mixer panel with meters, stereo mix for playback and export. No buses/sends, track automation lanes, surround or plugin hosting. |
 | 21–22 | ADR, Foley | NOT IMPLEMENTED | |
 | 23 | Captions/subtitles | NOT IMPLEMENTED | |
 | 24–30 | AI search, masking, tracking, enhancement, audio AI, generative video/audio | NOT IMPLEMENTED | No AI provider abstraction yet (planned for Phase 10). |
@@ -67,5 +67,6 @@ _Last updated: session 8._
 | Dockable/floating panels (§68) | PARTIAL | Qt docks can float onto other monitors. Workspace layouts are not saved yet. |
 | Accessibility (§70) | PARTIAL | Keyboard shortcuts for all edit/transport actions, accessible names, font-scaled metrics. Shortcut remapping is not available. |
 | Background jobs | IMPLEMENTED | `JobQueue` with priorities, cancellation, status history and completion listeners. Used for media analysis; export still uses its own thread. |
+| Audio meters | IMPLEMENTED | Per-track and master peak meters synchronised to what is heard, with ballistics and peak hold. |
 | Performance monitor (§75) | PARTIAL | The viewer shows the clock source and dropped frames during playback. The engine also counts audio underruns. There is no dedicated panel. |
 | Security (§71) | NOT IMPLEMENTED | Nothing network-facing exists yet. |

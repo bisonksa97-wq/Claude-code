@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/Rational.h"
+#include "render/AudioMixer.h"
 
 class QLabel;
 class QTimer;
@@ -98,6 +99,8 @@ public:
     int droppedFrames() const;
     bool playingWithAudio() const;
     const QImage& currentImage() const;
+    // Levels of what is being heard (nullopt when not playing).
+    std::optional<render::MixMeters> meters() const;
 
 public slots:
     void setPosition(FrameIndex frame);

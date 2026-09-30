@@ -26,6 +26,7 @@ InspectorPanel::InspectorPanel(QWidget* parent) : QWidget(parent) {
         const ClipParamInfo& info = paramInfo(p);
         Row& row = rows_[static_cast<std::size_t>(p)];
         auto* label = new QLabel(tr(info.label), form_);
+        row.label = label;
         row.value = new QDoubleSpinBox(form_);
         row.value->setRange(info.minimum, info.maximum);
         row.value->setDecimals(1);
@@ -84,16 +85,7 @@ void InspectorPanel::setSession(EditorSession* session) {
 
 void InspectorPanel::setClip(const std::string& clipId) {
     clipId_.clear();
-    if (session_ && !clipId.empty()) {
-        const Timeline& tl = session_->timeline();
-        const Track* track = tl.trackOfClip(clipId);
-        if (track && track->kind == TrackKind::Video) {
-            clipId_ = clipId;
-        } else if (track) {
-            for (const auto& partner : tl.linkedClips(clipId))
-                if (tl.trackOfClip(partner)->kind == TrackKind::Video) clipId_ = partner;
-        }
-    }
+    if (session_ && !clipId.empty() && session_->timeline().clip(clipId)) clipId_ = clipId;
     refresh();
 }
 
@@ -107,8 +99,16 @@ void InspectorPanel::refresh() {
     form_->setEnabled(clip != nullptr);
     if (!clip) {
         clipId_.clear();
-        title_->setText(tr("Select a video clip to edit its transform."));
+        title_->setText(tr("Select a clip to edit its parameters."));
         return;
+    }
+    const bool audioClip = session_->timeline().trackOfClip(clipId_)->kind == TrackKind::Audio;
+    for (ClipParam p : kAllClipParams) {
+        const Row& row = rows_[static_cast<std::size_t>(p)];
+        const bool visible = isAudioParam(p) == audioClip;
+        for (QWidget* w : std::initializer_list<QWidget*>{row.label, row.value, row.previous, row.key, row.next,
+                                                          row.interpolation, row.reset})
+            w->setVisible(visible);
     }
     const bool inside = clip->contains(playhead_);
     title_->setText(inside ? QString::fromStdString(clip->name)

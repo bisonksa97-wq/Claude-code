@@ -52,6 +52,10 @@ Status PlaybackEngine::start(const Project& project, const std::string& timeline
     mixedUntil_ = frameToSample(from_, rate_, sampleRate_);
     frames_.clear();
     lastShown_ = -1;
+    {
+        std::lock_guard lock(metersMutex_);
+        meterLog_.clear();
+    }
     dropped_ = 0;
     underruns_ = 0;
     {
@@ -120,6 +124,20 @@ std::optional<DisplayFrame> PlaybackEngine::frameForDisplay() {
     return out;
 }
 
+std::optional<render::MixMeters> PlaybackEngine::meters() const {
+    if (!running_) return std::nullopt;
+    const double seconds = audioActive_ ? static_cast<double>(audio_->playedFrames()) / sampleRate_ : clock_->elapsedSeconds();
+    const int64_t playing = frameToSample(from_, rate_, sampleRate_) + static_cast<int64_t>(seconds * sampleRate_);
+    std::lock_guard lock(metersMutex_);
+    const render::MixMeters* found = nullptr;
+    for (const auto& [startSample, levels] : meterLog_) {
+        if (startSample > playing) break;
+        found = &levels;
+    }
+    if (!found) return std::nullopt;
+    return *found;
+}
+
 PlaybackStats PlaybackEngine::stats() const { return {dropped_.load(), underruns_.load()}; }
 
 int64_t PlaybackEngine::bufferedAudioFrames() const { return fifo_ ? fifo_->size() : 0; }
@@ -159,7 +177,13 @@ void PlaybackEngine::audioLoop() {
             continue;
         }
         const int64_t n = std::min(kChunk, endSample - pos);
-        Status s = mixer.mix(*timeline, pos, n, buffer);
+        render::MixMeters levels;
+        Status s = mixer.mix(*timeline, pos, n, buffer, &levels);
+        {
+            std::lock_guard lock(metersMutex_);
+            meterLog_.emplace_back(pos, std::move(levels));
+            while (meterLog_.size() > 128) meterLog_.pop_front();  // ~2.7 s at 48 kHz
+        }
         if (!s.ok()) {
             fail(s.error());
             buffer.assign(static_cast<std::size_t>(n) * kChannels, 0.0f);

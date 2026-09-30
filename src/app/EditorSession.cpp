@@ -469,7 +469,11 @@ Status EditorSession::setTrackState(const std::string& trackId, const TrackState
         track->locked = state.locked;
         track->muted = state.muted;
         track->solo = state.solo;
-        track->gainDb = state.gainDb;
+        if (!std::isfinite(state.pan) || state.pan < -1.0 || state.pan > 1.0 || !std::isfinite(state.gainDb)) {
+            return makeError(ErrorCode::OutOfRange, "audio", "Pan must be between -1 and 1 and gain a finite number.");
+        }
+        track->gainDb = std::clamp(state.gainDb, -96.0, 24.0);
+        track->pan = state.pan;
         return Status::success();
     });
 }
@@ -939,13 +943,15 @@ Status EditorSession::moveTrack(const std::string& trackId, int index) {
 namespace {
 
 // Finds a video clip for a transform edit and, when `frame` is given, checks it lies inside.
-Result<Clip*> transformTarget(Timeline& t, const std::string& clipId, std::optional<FrameIndex> frame) {
+Result<Clip*> transformTarget(Timeline& t, const std::string& clipId, ClipParam param, std::optional<FrameIndex> frame) {
     Clip* c = t.clip(clipId);
     if (!c) return clipNotFound(clipId);
     const Track* track = t.trackOfClip(clipId);
-    if (track->kind != TrackKind::Video) {
-        return makeError(ErrorCode::InvalidArgument, "timeline", "Transforms apply to video clips only.",
-                         "Select the clip on the video track.");
+    if ((track->kind == TrackKind::Audio) != isAudioParam(param)) {
+        return makeError(ErrorCode::InvalidArgument, "timeline",
+                         std::string(paramInfo(param).label) + " applies to " + (isAudioParam(param) ? "audio" : "video") +
+                             " clips only.",
+                         std::string("Select the clip on the ") + (isAudioParam(param) ? "audio" : "video") + " track.");
     }
     if (track->locked) return makeError(ErrorCode::Locked, "timeline", "Track " + track->name + " is locked.", "Unlock it first.");
     if (frame && !c->contains(*frame)) {
@@ -966,7 +972,7 @@ Status EditorSession::setClipParameter(const std::string& clipId, ClipParam para
     if (!std::isfinite(value)) return makeError(ErrorCode::InvalidArgument, "timeline", "The value is not a number.");
     return editTimeline(std::string("Set ") + paramInfo(param).label, [&](Timeline& t) -> Status {
         const bool animated = t.clip(clipId) && t.clip(clipId)->transform[param].animated();
-        auto c = transformTarget(t, clipId, animated ? std::optional<FrameIndex>(timelineFrame) : std::nullopt);
+        auto c = transformTarget(t, clipId, param, animated ? std::optional<FrameIndex>(timelineFrame) : std::nullopt);
         if (!c.ok()) return c.error();
         AnimatedValue& v = c.value()->transform[param];
         if (v.animated()) v.setKey(c.value()->toSource(timelineFrame), clampParam(param, value));
@@ -977,7 +983,7 @@ Status EditorSession::setClipParameter(const std::string& clipId, ClipParam para
 
 Status EditorSession::setKeyframe(const std::string& clipId, ClipParam param, FrameIndex timelineFrame, bool present) {
     return editTimeline(present ? "Add Keyframe" : "Remove Keyframe", [&](Timeline& t) -> Status {
-        auto c = transformTarget(t, clipId, timelineFrame);
+        auto c = transformTarget(t, clipId, param, timelineFrame);
         if (!c.ok()) return c.error();
         AnimatedValue& v = c.value()->transform[param];
         const FrameIndex source = c.value()->toSource(timelineFrame);
@@ -997,7 +1003,7 @@ Status EditorSession::setKeyframe(const std::string& clipId, ClipParam param, Fr
 Status EditorSession::setKeyframeInterpolation(const std::string& clipId, ClipParam param, FrameIndex timelineFrame,
                                                Interpolation interpolation) {
     return editTimeline("Keyframe Interpolation", [&](Timeline& t) -> Status {
-        auto c = transformTarget(t, clipId, timelineFrame);
+        auto c = transformTarget(t, clipId, param, timelineFrame);
         if (!c.ok()) return c.error();
         AnimatedValue& v = c.value()->transform[param];
         const FrameIndex source = c.value()->toSource(timelineFrame);
@@ -1010,7 +1016,7 @@ Status EditorSession::setKeyframeInterpolation(const std::string& clipId, ClipPa
 
 Status EditorSession::resetClipParameter(const std::string& clipId, ClipParam param) {
     return editTimeline(std::string("Reset ") + paramInfo(param).label, [&](Timeline& t) -> Status {
-        auto c = transformTarget(t, clipId, std::nullopt);
+        auto c = transformTarget(t, clipId, param, std::nullopt);
         if (!c.ok()) return c.error();
         c.value()->transform[param] = AnimatedValue{paramInfo(param).defaultValue, {}};
         return Status::success();
@@ -1088,6 +1094,87 @@ Result<FrameIndex> EditorSession::applyDefaultTransition(const std::string& clip
     }
     UP_TRY(setTransition(clipId, edge, Transition{kind, length, TransitionAlignment::Center}, true));
     return length;
+}
+
+// --- Track audio effects -----------------------------------------------------------------
+
+namespace {
+
+Result<Track*> audioTrack(Timeline& t, const std::string& trackId) {
+    Track* track = t.track(trackId);
+    if (!track) {
+        return makeError(ErrorCode::NotFound, "timeline", "The track does not exist.", "Refresh the view and try again.");
+    }
+    if (track->kind != TrackKind::Audio) {
+        return makeError(ErrorCode::InvalidArgument, "audio", "Audio effects go on audio tracks.", "Choose an audio track.");
+    }
+    return track;
+}
+
+std::vector<audio::EffectSpec>::iterator findEffect(Track& track, const std::string& effectId) {
+    return std::find_if(track.effects.begin(), track.effects.end(),
+                        [&](const audio::EffectSpec& e) { return e.id == effectId; });
+}
+
+Error effectNotFound() { return makeError(ErrorCode::NotFound, "audio", "The effect no longer exists."); }
+
+}  // namespace
+
+Result<std::string> EditorSession::addTrackEffect(const std::string& trackId, const std::string& type) {
+    auto spec = audio::makeEffect(type);
+    if (!spec.ok()) return spec.error();
+    const std::string id = spec.value().id;
+    const Status s = editTimeline("Add " + audio::effectType(type)->label, [&](Timeline& t) -> Status {
+        auto track = audioTrack(t, trackId);
+        if (!track.ok()) return track.error();
+        track.value()->effects.push_back(spec.value());
+        return Status::success();
+    });
+    if (!s.ok()) return s.error();
+    return id;
+}
+
+Status EditorSession::updateTrackEffect(const std::string& trackId, const audio::EffectSpec& effect) {
+    UP_TRY(audio::validateEffect(effect));
+    return editTimeline("Change Effect", [&](Timeline& t) -> Status {
+        auto track = audioTrack(t, trackId);
+        if (!track.ok()) return track.error();
+        auto it = findEffect(*track.value(), effect.id);
+        if (it == track.value()->effects.end()) return effectNotFound();
+        if (it->type != effect.type) {
+            return makeError(ErrorCode::InvalidArgument, "audio", "An effect's type cannot be changed; add a new effect instead.");
+        }
+        *it = effect;
+        return Status::success();
+    });
+}
+
+Status EditorSession::removeTrackEffect(const std::string& trackId, const std::string& effectId) {
+    return editTimeline("Remove Effect", [&](Timeline& t) -> Status {
+        auto track = audioTrack(t, trackId);
+        if (!track.ok()) return track.error();
+        auto it = findEffect(*track.value(), effectId);
+        if (it == track.value()->effects.end()) return effectNotFound();
+        track.value()->effects.erase(it);
+        return Status::success();
+    });
+}
+
+Status EditorSession::moveTrackEffect(const std::string& trackId, const std::string& effectId, int index) {
+    return editTimeline("Reorder Effects", [&](Timeline& t) -> Status {
+        auto track = audioTrack(t, trackId);
+        if (!track.ok()) return track.error();
+        auto& effects = track.value()->effects;
+        auto it = findEffect(*track.value(), effectId);
+        if (it == effects.end()) return effectNotFound();
+        if (index < 0 || index >= static_cast<int>(effects.size())) {
+            return makeError(ErrorCode::OutOfRange, "audio", "There is no effect slot " + std::to_string(index + 1) + ".");
+        }
+        audio::EffectSpec moving = *it;
+        effects.erase(it);
+        effects.insert(effects.begin() + index, std::move(moving));
+        return Status::success();
+    });
 }
 
 }  // namespace up

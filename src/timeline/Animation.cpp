@@ -20,15 +20,17 @@ std::optional<Interpolation> interpolationFromString(const std::string& name) {
     return std::nullopt;
 }
 
-double AnimatedValue::at(FrameIndex frame) const {
+double AnimatedValue::at(FrameIndex frame) const { return atFractional(static_cast<double>(frame)); }
+
+double AnimatedValue::atFractional(double frame) const {
     if (keys.empty()) return value;
-    if (frame <= keys.front().frame) return keys.front().value;
-    if (frame >= keys.back().frame) return keys.back().value;
+    if (frame <= static_cast<double>(keys.front().frame)) return keys.front().value;
+    if (frame >= static_cast<double>(keys.back().frame)) return keys.back().value;
     auto next = std::upper_bound(keys.begin(), keys.end(), frame,
-                                 [](FrameIndex f, const Keyframe& k) { return f < k.frame; });
+                                 [](double f, const Keyframe& k) { return f < static_cast<double>(k.frame); });
     const Keyframe& b = *next;
     const Keyframe& a = *(next - 1);
-    const double t = static_cast<double>(frame - a.frame) / static_cast<double>(b.frame - a.frame);
+    const double t = (frame - static_cast<double>(a.frame)) / static_cast<double>(b.frame - a.frame);
     switch (a.interpolation) {
         case Interpolation::Hold: return a.value;
         case Interpolation::EaseInOut: {
@@ -77,9 +79,13 @@ const ClipParamInfo& paramInfo(ClipParam param) {
         {"cropRight", "Crop Right", "%", 0.0, 0.0, 100.0},
         {"cropTop", "Crop Top", "%", 0.0, 0.0, 100.0},
         {"cropBottom", "Crop Bottom", "%", 0.0, 0.0, 100.0},
+        {"volume", "Volume", "dB", 0.0, -60.0, 12.0},
+        {"pan", "Pan", "", 0.0, -100.0, 100.0},
     }};
     return info[static_cast<std::size_t>(param)];
 }
+
+bool isAudioParam(ClipParam param) { return param == ClipParam::Volume || param == ClipParam::Pan; }
 
 std::optional<ClipParam> clipParamFromString(const std::string& id) {
     for (ClipParam p : kAllClipParams)

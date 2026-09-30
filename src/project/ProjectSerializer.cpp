@@ -161,9 +161,13 @@ Clip clipFromJson(const json& j) {
 json toJson(const Track& t) {
     json clips = json::array();
     for (const auto& c : t.clips) clips.push_back(toJson(c));
+    json effects = json::array();
+    for (const auto& fx : t.effects)
+        effects.push_back(json{{"id", fx.id}, {"type", fx.type}, {"enabled", fx.enabled}, {"params", fx.params}});
     return json{{"id", t.id},         {"kind", toString(t.kind)}, {"name", t.name},
                 {"enabled", t.enabled}, {"locked", t.locked},     {"muted", t.muted},
-                {"solo", t.solo},     {"gainDb", t.gainDb},       {"clips", clips}};
+                {"solo", t.solo},     {"gainDb", t.gainDb},       {"pan", t.pan},
+                {"effects", effects}, {"clips", clips}};
 }
 
 Track trackFromJson(const json& j) {
@@ -176,6 +180,15 @@ Track trackFromJson(const json& j) {
     t.muted = j.value("muted", false);
     t.solo = j.value("solo", false);
     t.gainDb = j.value("gainDb", 0.0);
+    t.pan = j.value("pan", 0.0);
+    for (const auto& fj : j.value("effects", json::array())) {
+        audio::EffectSpec fx;
+        fx.id = fj.at("id").get<std::string>();
+        fx.type = fj.at("type").get<std::string>();
+        fx.enabled = fj.value("enabled", true);
+        fx.params = fj.value("params", std::map<std::string, double>{});
+        t.effects.push_back(std::move(fx));
+    }
     for (const auto& c : j.value("clips", json::array())) t.clips.push_back(clipFromJson(c));
     return t;
 }

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/Rational.h"
+#include "audio/AudioEffect.h"
 #include "core/Result.h"
 #include "timeline/Animation.h"
 
@@ -94,6 +95,9 @@ struct Track {
     bool muted = false;   // audio only
     bool solo = false;    // audio only
     double gainDb = 0.0;  // audio only
+    double pan = 0.0;     // audio only, -1 (left) .. 1 (right)
+    // Audio only: insert effects applied to the track's summed clips, before gain and pan.
+    std::vector<audio::EffectSpec> effects;
     // Sorted by start; clips never overlap (enforced by the edit operations).
     std::vector<Clip> clips;
 

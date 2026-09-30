@@ -18,7 +18,13 @@
 #include <QDoubleSpinBox>
 #include <QToolButton>
 
+#include <QDial>
+#include <QDockWidget>
+#include <QSlider>
+
+#include "ui/EffectsDialog.h"
 #include "ui/InspectorPanel.h"
+#include "ui/MixerPanel.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
@@ -438,9 +444,14 @@ TEST(Ui, InspectorEditsTransformsAndKeyframes) {
     const std::string video = tl.tracks[0].clips[0].id;
     ui::InspectorPanel* inspector = window.inspector();
 
-    // Selecting the audio half of the linked pair edits the video clip.
+    // Selecting the audio half of the pair shows its audio parameters; the video clip its transform.
     window.timeline()->selectClip(QString::fromStdString(tl.tracks[2].clips[0].id));
+    EXPECT_EQ(inspector->clipId(), tl.tracks[2].clips[0].id);
+    EXPECT_FALSE(inspector->valueEditor(ClipParam::Scale)->isVisibleTo(inspector));
+    EXPECT_TRUE(inspector->valueEditor(ClipParam::Volume)->isVisibleTo(inspector));
+    window.timeline()->selectClip(QString::fromStdString(video));
     EXPECT_EQ(inspector->clipId(), video);
+    EXPECT_TRUE(inspector->valueEditor(ClipParam::Scale)->isVisibleTo(inspector));
 
     // Scale to 50%: the program monitor shows black around a smaller picture.
     window.viewer()->setPosition(5);
@@ -520,6 +531,81 @@ TEST(Ui, TransitionsFromTheEditMenu) {
     EXPECT_FALSE(tl.tracks[2].clips[1].transitionIn.has_value());
     window.session()->undo();
     EXPECT_TRUE(tl.clip(blue)->transitionIn.has_value());
+}
+
+TEST(Ui, AudioMixerStripsMetersAndEffects) {
+    test::TempDir dir;
+    media::SyntheticSpec tone = test::solid(20, 200, 20, 50, 440);
+    tone.toneLevel = 0.5f;
+    test::makeMedia(dir / "tone.mp4", tone);
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 850);
+    auto session = EditorSession::createNew("Mix", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "tone.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    ui::MixerPanel* mixer = window.mixer();
+    const Timeline& tl = window.session()->timeline();
+    const std::string a1 = tl.trackIdsOfKind(TrackKind::Audio)[0];
+    ASSERT_EQ(mixer->stripCount(), 2);
+
+    // Fader and pan write through the session as undoable edits.
+    mixer->fader(0)->setValue(-60);  // tenths of a dB
+    EXPECT_DOUBLE_EQ(tl.track(a1)->gainDb, -6.0);
+    mixer->panDial(0)->setValue(-50);
+    EXPECT_DOUBLE_EQ(tl.track(a1)->pan, -0.5);
+    window.session()->undo();
+    EXPECT_DOUBLE_EQ(tl.track(a1)->pan, 0.0);
+    EXPECT_EQ(mixer->panDial(0)->value(), 0);  // strip follows the model
+
+    // Adding a track adds a strip.
+    ASSERT_TRUE(window.session()->addTrack(TrackKind::Audio, "Music").ok());
+    EXPECT_EQ(mixer->stripCount(), 3);
+
+    // Meter ballistics: instant rise, then falls at 24 dB/s.
+    render::MixMeters levels;
+    levels.tracks[a1] = render::ChannelMeter{0.5f, 0.5f, 0.35f};
+    mixer->showMeters(levels);
+    EXPECT_NEAR(mixer->meter(0)->displayedDb(0), -6.02, 0.01);
+    QTest::qWait(250);
+    mixer->showMeters(render::MixMeters{});
+    EXPECT_LT(mixer->meter(0)->displayedDb(0), -9.0);
+    EXPECT_GT(mixer->meter(0)->displayedDb(0), -16.0);
+
+    // During playback the meters come from the engine at the audible position.
+    auto audio = std::make_shared<PumpedAudio>();
+    window.viewer()->setAudioOutput(audio);
+    window.viewer()->togglePlay();
+    for (int i = 0; i < 10; ++i) {
+        QTest::qWait(2);
+        audio->pump(1024);
+    }
+    auto live = window.viewer()->meters();
+    ASSERT_TRUE(live.has_value());
+    EXPECT_NEAR(live->master.peakLeft, 0.5 * 0.501, 0.05);  // tone at 0.5 through the -6 dB fader
+    window.viewer()->togglePlay();
+
+    // Effects dialog: add an EQ and change a parameter through its editor.
+    ui::EffectsDialog dialog(window.session(), a1);
+    dialog.addEffect("eq3");
+    ASSERT_EQ(tl.track(a1)->effects.size(), 1u);
+    QDoubleSpinBox* lowGain = nullptr;
+    for (auto* spin : dialog.findChildren<QDoubleSpinBox*>())
+        if (spin->accessibleName() == "Low Gain") lowGain = spin;
+    ASSERT_NE(lowGain, nullptr);
+    lowGain->setValue(6);
+    EXPECT_EQ(tl.track(a1)->effects[0].param("lowGain"), 6);
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_MIXER")) {
+        for (auto* dock : window.findChildren<QDockWidget*>())
+            if (dock->objectName() == "MixerDock") dock->raise();
+        mixer->showMeters(levels);
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
 }
 
 TEST(Ui, ThemesUseCentralTokens) {

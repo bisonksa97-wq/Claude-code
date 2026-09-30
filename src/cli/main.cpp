@@ -183,6 +183,14 @@ Tracks
   track <project> remove <track> [--force]      --force also deletes the track's clips
   track <project> rename <track> <new name>
   track <project> move <track> <position>       1 = bottom of its kind (V1/A1)
+  track <project> gain <track> <dB>
+  track <project> pan <track> <-100..100>
+
+Audio effects (types: gain eq3 compressor; effects are numbered from 1 in processing order)
+  fx <project> <track> list
+  fx <project> <track> add <type>
+  fx <project> <track> set <n> <param> <value>
+  fx <project> <track> enable|disable|remove <n>
   lift <project> <clip>
   ripple-delete <project> <clip>
 
@@ -522,6 +530,51 @@ int main(int argc, char** argv) {
         return saveAndReport(*s.value(), transition ? "Transition set" : "Transition removed");
     }};
 
+    commands["fx"] = {3, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        std::string trackId;
+        for (const auto& t : session.timeline().tracks)
+            if (t.name == pos[1]) trackId = t.id;
+        if (trackId.empty()) return fail(makeError(ErrorCode::NotFound, "cli", "No track named '" + pos[1] + "'."));
+        const Track& track = *session.timeline().track(trackId);
+        const std::string& action = pos[2];
+        if (action == "list") {
+            int n = 1;
+            for (const auto& fx : track.effects) {
+                std::cout << n++ << ". " << fx.type << (fx.enabled ? "" : " (disabled)");
+                for (const auto& [k, v] : fx.params) std::cout << "  " << k << "=" << v;
+                std::cout << "\n";
+            }
+            return 0;
+        }
+        if (pos.size() < 4) return usageError("fx " + action + " needs another argument");
+        if (action == "add") {
+            auto r = session.addTrackEffect(trackId, pos[3]);
+            if (!r.ok()) return fail(r.error());
+            return saveAndReport(session, "Added " + pos[3]);
+        }
+        const int index = std::atoi(pos[3].c_str()) - 1;
+        if (index < 0 || index >= static_cast<int>(track.effects.size())) return usageError("no effect number " + pos[3]);
+        audio::EffectSpec fx = track.effects[static_cast<std::size_t>(index)];
+        Status st = Status::success();
+        if (action == "remove") {
+            st = session.removeTrackEffect(trackId, fx.id);
+        } else if (action == "enable" || action == "disable") {
+            fx.enabled = action == "enable";
+            st = session.updateTrackEffect(trackId, fx);
+        } else if (action == "set") {
+            if (pos.size() < 6) return usageError("fx set needs a parameter and a value");
+            fx.params[pos[4]] = std::atof(pos[5].c_str());
+            st = session.updateTrackEffect(trackId, fx);
+        } else {
+            return usageError("fx actions are list, add, set, enable, disable and remove");
+        }
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(session, "Effects updated");
+    }};
+
     commands["track"] = {3, [&](const cli::Args& a) {
         auto s = openProject(pos[0]);
         if (!s.ok()) return fail(s.error());
@@ -546,6 +599,14 @@ int main(int argc, char** argv) {
         } else if (action == "move") {
             if (pos.size() < 4) return usageError("track move needs a position");
             st = session.moveTrack(trackId, std::atoi(pos[3].c_str()) - 1);
+        } else if (action == "gain" || action == "pan") {
+            if (pos.size() < 4) return usageError("track " + action + " needs a value");
+            char* end = nullptr;
+            const double v = std::strtod(pos[3].c_str(), &end);
+            if (end == pos[3].c_str() || *end != '\0') return usageError("invalid value " + pos[3]);
+            TrackState state = TrackState::of(*session.timeline().track(trackId));
+            (action == "gain" ? state.gainDb : state.pan) = action == "gain" ? v : v / 100.0;
+            st = session.setTrackState(trackId, state);
         } else {
             return usageError("track actions are add, remove, rename and move");
         }

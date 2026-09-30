@@ -357,3 +357,126 @@ TEST(Transitions, ExportedDissolve) {
     EXPECT_NEAR(mid.r, 220 * 0.525 + 20 * 0.475, 12);
     EXPECT_NEAR(mid.b, 20 * 0.525 + 220 * 0.475, 12);
 }
+
+namespace {
+
+// One 2-second 440 Hz clip (0.5 amplitude) on V1/A1.
+struct MixFixture {
+    test::TempDir dir;
+    std::unique_ptr<EditorSession> session;
+    std::string audioClip, a1;
+
+    MixFixture() {
+        media::SyntheticSpec tone = test::solid(0, 0, 0, 50, 440);
+        tone.toneLevel = 0.5f;
+        test::makeMedia(dir / "tone.mp4", tone);
+        session = EditorSession::createNew("Mix", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+        const auto ids = session->importMedia({dir / "tone.mp4"}).importedIds;
+        EXPECT_TRUE(session->appendMedia(ids[0]).ok());
+        audioClip = session->timeline().tracks[2].clips[0].id;
+        a1 = session->timeline().tracks[2].id;
+    }
+
+    // Left/right RMS of 0.1 s starting at `frame`, plus meters.
+    std::pair<double, double> levels(FrameIndex frame, render::MixMeters* meters = nullptr) {
+        render::AudioMixer mixer(render::resolverFor(session->project()));
+        std::vector<float> buf;
+        EXPECT_TRUE(mixer.mix(session->timeline(), frameToSample(frame, FrameRate{25, 1}, 48000), 4800, buf, meters).ok());
+        double l = 0, r = 0;
+        for (std::size_t i = 0; i < buf.size(); i += 2) {
+            l += static_cast<double>(buf[i]) * buf[i];
+            r += static_cast<double>(buf[i + 1]) * buf[i + 1];
+        }
+        return {std::sqrt(l / 4800), std::sqrt(r / 4800)};
+    }
+};
+
+}  // namespace
+
+TEST(Mixing, TrackPanGainAndMeters) {
+    MixFixture fx;
+    const double full = 0.5 / std::sqrt(2.0);
+    auto [l, r] = fx.levels(10);
+    EXPECT_NEAR(l, full, 0.02);
+    EXPECT_NEAR(r, full, 0.02);
+
+    TrackState state = TrackState::of(*fx.session->timeline().track(fx.a1));
+    state.pan = -1.0;
+    state.gainDb = -6.0;
+    ASSERT_TRUE(fx.session->setTrackState(fx.a1, state).ok());
+    render::MixMeters meters;
+    std::tie(l, r) = fx.levels(10, &meters);
+    EXPECT_NEAR(l, full * 0.501, 0.02);  // -6 dB
+    EXPECT_LT(r, 0.001);                 // hard left
+    ASSERT_EQ(meters.tracks.count(fx.a1), 1u);
+    EXPECT_NEAR(meters.tracks[fx.a1].peakLeft, 0.25, 0.03);
+    EXPECT_LT(meters.tracks[fx.a1].peakRight, 0.001);
+    EXPECT_NEAR(meters.master.peakLeft, 0.25, 0.03);
+
+    state.pan = 2.0;
+    EXPECT_FALSE(fx.session->setTrackState(fx.a1, state).ok());
+}
+
+TEST(Mixing, ClipVolumeAndPanAutomation) {
+    MixFixture fx;
+    // Fade the clip's volume from -60 dB at frame 0 to 0 dB at frame 40.
+    ASSERT_TRUE(fx.session->setKeyframe(fx.audioClip, ClipParam::Volume, 0, true).ok());
+    ASSERT_TRUE(fx.session->setClipParameter(fx.audioClip, ClipParam::Volume, -60, 0).ok());
+    ASSERT_TRUE(fx.session->setKeyframe(fx.audioClip, ClipParam::Volume, 40, true).ok());
+    ASSERT_TRUE(fx.session->setClipParameter(fx.audioClip, ClipParam::Volume, 0, 40).ok());
+    const double full = 0.5 / std::sqrt(2.0);
+    EXPECT_LT(fx.levels(0).first, full * 0.05);
+    // The 0.1 s window from frame 18 centres on ~19.25: -60 + 60 * 19.25 / 40 = about -31 dB.
+    EXPECT_NEAR(fx.levels(18).first, full * std::pow(10.0, -31.0 / 20.0), full * 0.01);
+    EXPECT_NEAR(fx.levels(42).first, full, 0.02);
+    // Constant clip pan to the right.
+    ASSERT_TRUE(fx.session->setClipParameter(fx.audioClip, ClipParam::Pan, 100, 0).ok());
+    const auto [l, r] = fx.levels(42);
+    EXPECT_LT(l, 0.001);
+    EXPECT_NEAR(r, full, 0.02);
+    // Audio parameters only on audio clips.
+    const std::string video = fx.session->timeline().tracks[0].clips[0].id;
+    EXPECT_EQ(fx.session->setClipParameter(video, ClipParam::Volume, -6, 0).error().code, ErrorCode::InvalidArgument);
+}
+
+TEST(Mixing, TrackEffectsProcessTheBusAndKeepStateAcrossCalls) {
+    MixFixture fx;
+    auto gain = fx.session->addTrackEffect(fx.a1, "gain");
+    ASSERT_TRUE(gain.ok());
+    audio::EffectSpec g = fx.session->timeline().track(fx.a1)->effects[0];
+    g.params["gain"] = -12;
+    ASSERT_TRUE(fx.session->updateTrackEffect(fx.a1, g).ok());
+    const double full = 0.5 / std::sqrt(2.0);
+    EXPECT_NEAR(fx.levels(10).first, full * 0.251, 0.01);
+    g.enabled = false;
+    ASSERT_TRUE(fx.session->updateTrackEffect(fx.a1, g).ok());
+    EXPECT_NEAR(fx.levels(10).first, full, 0.02);
+
+    // A compressor mixed in two consecutive calls matches one long call (state carried over).
+    ASSERT_TRUE(fx.session->removeTrackEffect(fx.a1, g.id).ok());
+    ASSERT_TRUE(fx.session->addTrackEffect(fx.a1, "compressor").ok());
+    const Timeline& tl = fx.session->timeline();
+    render::AudioMixer one(render::resolverFor(fx.session->project()));
+    render::AudioMixer two(render::resolverFor(fx.session->project()));
+    std::vector<float> whole, a, b;
+    ASSERT_TRUE(one.mix(tl, 0, 9600, whole).ok());
+    ASSERT_TRUE(two.mix(tl, 0, 4800, a).ok());
+    ASSERT_TRUE(two.mix(tl, 4800, 4800, b).ok());
+    a.insert(a.end(), b.begin(), b.end());
+    double diff = 0;
+    for (std::size_t i = 0; i < whole.size(); ++i) diff = std::max(diff, static_cast<double>(std::abs(whole[i] - a[i])));
+    EXPECT_LT(diff, 1e-6);
+
+    // Chain editing: order, validation, wrong track kind, undo.
+    auto eq = fx.session->addTrackEffect(fx.a1, "eq3");
+    ASSERT_TRUE(eq.ok());
+    ASSERT_TRUE(fx.session->moveTrackEffect(fx.a1, eq.value(), 0).ok());
+    EXPECT_EQ(tl.track(fx.a1)->effects[0].type, "eq3");
+    audio::EffectSpec bad = tl.track(fx.a1)->effects[0];
+    bad.params["midQ"] = 50;
+    EXPECT_EQ(fx.session->updateTrackEffect(fx.a1, bad).error().code, ErrorCode::OutOfRange);
+    EXPECT_FALSE(fx.session->addTrackEffect(tl.tracks[0].id, "gain").ok());  // video track
+    EXPECT_FALSE(fx.session->addTrackEffect(fx.a1, "reverb").ok());
+    fx.session->undo();
+    EXPECT_EQ(tl.track(fx.a1)->effects[0].type, "compressor");
+}

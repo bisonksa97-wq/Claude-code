@@ -251,7 +251,7 @@ bool TimelineView::handleHeaderClick(const QPoint& pos) {
         if (!st.ok()) report(errorText(st.error()));
         return true;
     }
-    TrackState s{track->enabled, track->locked, track->muted, track->solo, track->gainDb};
+    TrackState s = TrackState::of(*track);
     // Toggle order from the right edge: lock, enable/mute, solo (audio only).
     if (toggleRect(row, 0).contains(pos)) s.locked = !s.locked;
     else if (toggleRect(row, 1).contains(pos)) {
@@ -635,7 +635,7 @@ void TimelineView::drawClip(QPainter& p, const Clip& clip, const QRect& r, bool 
         p.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, p.fontMetrics().elidedText(label, Qt::ElideRight, textRect.width()));
     }
     // Keyframes (any animated parameter) as small diamonds along the bottom edge.
-    if (isVideo) {
+    {
         std::vector<FrameIndex> keyFrames;
         for (ClipParam param : kAllClipParams)
             for (const auto& k : clip.transform[param].keys) keyFrames.push_back(k.frame);

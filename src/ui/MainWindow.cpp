@@ -27,6 +27,7 @@
 #include "ui/InspectorPanel.h"
 #include "ui/MarkerDialog.h"
 #include "ui/MediaPoolPanel.h"
+#include "ui/MixerPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
 #include "ui/ViewerPanel.h"
@@ -68,6 +69,14 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     inspectorDock->setWidget(inspector_);
     addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
 
+    mixer_ = new MixerPanel(this);
+    auto* mixerDock = new QDockWidget(tr("Audio Mixer"), this);
+    mixerDock->setObjectName("MixerDock");
+    mixerDock->setWidget(mixer_);
+    addDockWidget(Qt::RightDockWidgetArea, mixerDock);
+    tabifyDockWidget(inspectorDock, mixerDock);
+    inspectorDock->raise();
+
     timelinePanel_ = new TimelinePanel(this);
     auto* timelineDock = new QDockWidget(tr("Timeline"), this);
     timelineDock->setObjectName("TimelineDock");
@@ -97,6 +106,8 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     connect(viewer_, &ViewerPanel::positionChanged, inspector_, &InspectorPanel::setPlayhead);
     connect(inspector_, &InspectorPanel::seekRequested, viewer_, &ViewerPanel::setPosition);
     connect(inspector_, &InspectorPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m, 4000); });
+    connect(mixer_, &MixerPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m, 4000); });
+    mixer_->setViewer(viewer_);
     connect(tv, &TimelineView::markerEditRequested, this, &MainWindow::editMarker);
     connect(tv, &TimelineView::markerDeleteRequested, this, [this](const QString& id) {
         runEdit([&] { return session_->removeMarker(id.toStdString()); });
@@ -167,12 +178,14 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
         viewer_->refresh();
         syncSourceAndMarks();
         inspector_->refresh();
+        mixer_->refresh();
         updateTitleAndActions();
     });
     assets_->prefetch(session_->project());
     mediaPool_->setSession(session_.get());
     timeline()->setSession(session_.get());
     inspector_->setSession(session_.get());
+    mixer_->setSession(session_.get());
     viewer_->setSource(&session_->project(), session_->timeline().id);
     viewer_->setTitle(tr("Program — %1").arg(qs(session_->timeline().name)));
     clearSource();

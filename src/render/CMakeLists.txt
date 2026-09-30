@@ -5,4 +5,4 @@ up_add_module(up_render
         ExportJob.cpp
         FrameCompositor.cpp
         MediaSource.cpp
-    DEPS up_core up_timeline up_project up_codec)
+    DEPS up_core up_audio up_timeline up_project up_codec)

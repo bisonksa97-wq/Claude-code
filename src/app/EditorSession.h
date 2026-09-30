@@ -20,6 +20,12 @@ struct TrackState {
     bool muted = false;
     bool solo = false;
     double gainDb = 0.0;
+    double pan = 0.0;  // -1 (left) .. 1 (right)
+
+    // The current state of `track`, for changing one field and writing it back.
+    static TrackState of(const Track& track) {
+        return {track.enabled, track.locked, track.muted, track.solo, track.gainDb, track.pan};
+    }
 };
 
 // A marker together with where it lives and where it currently appears.
@@ -141,6 +147,13 @@ public:
     // to `frame`, shortened to what the media allows. Returns the length applied.
     Result<FrameIndex> applyDefaultTransition(const std::string& clipId, FrameIndex frame,
                                               TransitionKind kind = TransitionKind::Dissolve, FrameIndex preferred = 0);
+
+    // --- Track audio effects (audio tracks only; one undo step each) ----------------------
+    Result<std::string> addTrackEffect(const std::string& trackId, const std::string& type);
+    // Replaces the effect with the same id (parameters, enabled); values are validated.
+    Status updateTrackEffect(const std::string& trackId, const audio::EffectSpec& effect);
+    Status removeTrackEffect(const std::string& trackId, const std::string& effectId);
+    Status moveTrackEffect(const std::string& trackId, const std::string& effectId, int index);
 
     // --- Tracks ------------------------------------------------------------------------
     // Adds a track above the others of its kind. Returns its id.

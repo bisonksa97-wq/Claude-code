@@ -59,6 +59,15 @@ const ProjectMigrator& ProjectMigrator::standard() {
                     }
             return Status::success();
         });
+        // v5 -> v6: tracks gain pan and an audio effect chain (centre, no effects).
+        m.addStep(5, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"])
+                for (auto& tr : tl["tracks"]) {
+                    tr["pan"] = 0.0;
+                    tr["effects"] = nlohmann::json::array();
+                }
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

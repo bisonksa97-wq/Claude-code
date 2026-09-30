@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include "playback/AudioOutput.h"
 #include "playback/SampleFifo.h"
 #include "project/Project.h"
+#include "render/AudioMixer.h"
 
 namespace up::playback {
 
@@ -63,6 +65,8 @@ public:
     std::optional<DisplayFrame> frameForDisplay();
 
     PlaybackStats stats() const;
+    // Levels of the audio being heard now (mixed ahead, looked up at the played position).
+    std::optional<render::MixMeters> meters() const;
     // Frames of audio mixed ahead and waiting for the device (diagnostics/tests).
     int64_t bufferedAudioFrames() const;
     Status lastError() const;
@@ -99,6 +103,9 @@ private:
     std::condition_variable wake_;
     std::map<FrameIndex, VideoFrame> frames_;
     FrameIndex lastShown_ = -1;
+
+    mutable std::mutex metersMutex_;
+    std::deque<std::pair<int64_t, render::MixMeters>> meterLog_;  // (first timeline sample, levels)
 
     std::atomic<int64_t> dropped_{0};
     std::atomic<int64_t> underruns_{0};

@@ -249,6 +249,41 @@ TEST(ProjectFormat, RoundTripsTransitionsAndMigratesV4) {
     EXPECT_FALSE(migrated.value().timelines[0].tracks[0].clips[0].transitionIn.has_value());
 }
 
+TEST(ProjectFormat, RoundTripsTrackAudioAndMigratesV5) {
+    Project p = sampleProject();
+    Track& a1 = p.timelines[0].tracks[2];
+    a1.pan = -0.25;
+    auto eq = audio::makeEffect("eq3");
+    ASSERT_TRUE(eq.ok());
+    eq.value().params["lowGain"] = 3;
+    eq.value().enabled = false;
+    a1.effects.push_back(eq.value());
+    p.timelines[0].tracks[0].clips[0].transform[ClipParam::Volume].setKey(4, -12);
+    auto q = ProjectSerializer::fromJson(ProjectSerializer::toJson(p));
+    ASSERT_TRUE(q.ok()) << q.error().toString();
+    const Track& qa = q.value().timelines[0].tracks[2];
+    EXPECT_DOUBLE_EQ(qa.pan, -0.25);
+    ASSERT_EQ(qa.effects.size(), 1u);
+    EXPECT_EQ(qa.effects[0].type, "eq3");
+    EXPECT_FALSE(qa.effects[0].enabled);
+    EXPECT_EQ(qa.effects[0].param("lowGain"), 3);
+    EXPECT_EQ(q.value().timelines[0].tracks[0].clips[0].transform[ClipParam::Volume].keys.size(), 1u);
+
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["formatVersion"] = 5;
+    for (auto& tr : doc["timelines"][0]["tracks"]) {
+        tr.erase("pan");
+        tr.erase("effects");
+    }
+    auto migrated = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(migrated.ok()) << migrated.error().toString();
+    EXPECT_TRUE(migrated.value().timelines[0].tracks[2].effects.empty());
+    // An invalid effect parameter in a file is rejected on load.
+    auto broken = nlohmann::json::parse(ProjectSerializer::toJson(p));
+    broken["timelines"][0]["tracks"][2]["effects"][0]["params"]["midQ"] = 99;
+    EXPECT_FALSE(ProjectSerializer::fromJson(broken.dump()).ok());
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

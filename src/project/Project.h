@@ -49,7 +49,7 @@ struct SequenceSettings {
 
 class Project {
 public:
-    static constexpr int kFormatVersion = 5;
+    static constexpr int kFormatVersion = 6;
 
     std::string id;
     std::string name;

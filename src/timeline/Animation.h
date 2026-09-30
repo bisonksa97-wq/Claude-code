@@ -30,20 +30,35 @@ struct AnimatedValue {
     bool animated() const { return !keys.empty(); }
     // Value at a source frame: constant before the first key and after the last.
     double at(FrameIndex frame) const;
+    // Same, at a fractional frame (used for per-sample audio automation).
+    double atFractional(double frame) const;
     const Keyframe* keyAt(FrameIndex frame) const;
     // Inserts or replaces the key at `frame`.
     void setKey(FrameIndex frame, double v, std::optional<Interpolation> interpolation = std::nullopt);
     bool removeKey(FrameIndex frame);
 };
 
-// Animatable video clip properties. Positions are offsets from the frame centre in
-// timeline pixels; scale and opacity are percentages; rotation is in degrees
-// (clockwise); crops are percentages of the source width/height removed from each edge.
-enum class ClipParam { PositionX, PositionY, Scale, Rotation, Opacity, CropLeft, CropRight, CropTop, CropBottom };
+// Animatable clip properties.
+// Video: positions are offsets from the frame centre in timeline pixels; scale and
+// opacity are percentages; rotation is in degrees (clockwise); crops are percentages
+// of the source width/height removed from each edge.
+// Audio: volume in dB (added to the clip gain); pan from -100 (left) to 100 (right).
+enum class ClipParam {
+    PositionX, PositionY, Scale, Rotation, Opacity, CropLeft, CropRight, CropTop, CropBottom,
+    Volume, Pan,
+};
 
-inline constexpr std::array<ClipParam, 9> kAllClipParams = {
-    ClipParam::PositionX, ClipParam::PositionY, ClipParam::Scale,     ClipParam::Rotation, ClipParam::Opacity,
-    ClipParam::CropLeft,  ClipParam::CropRight, ClipParam::CropTop,   ClipParam::CropBottom};
+inline constexpr std::array<ClipParam, 11> kAllClipParams = {
+    ClipParam::PositionX, ClipParam::PositionY, ClipParam::Scale,   ClipParam::Rotation,
+    ClipParam::Opacity,   ClipParam::CropLeft,  ClipParam::CropRight, ClipParam::CropTop,
+    ClipParam::CropBottom, ClipParam::Volume,   ClipParam::Pan};
+inline constexpr std::array<ClipParam, 9> kVideoClipParams = {
+    ClipParam::PositionX, ClipParam::PositionY, ClipParam::Scale,   ClipParam::Rotation, ClipParam::Opacity,
+    ClipParam::CropLeft,  ClipParam::CropRight, ClipParam::CropTop, ClipParam::CropBottom};
+inline constexpr std::array<ClipParam, 2> kAudioClipParams = {ClipParam::Volume, ClipParam::Pan};
+
+// Whether a parameter applies to clips on audio tracks (otherwise video tracks).
+bool isAudioParam(ClipParam param);
 
 struct ClipParamInfo {
     const char* id;     // stable identifier used in files and the CLI, e.g. "positionX"

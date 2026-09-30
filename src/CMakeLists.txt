@@ -1,6 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(cache)
 add_subdirectory(jobs)
+add_subdirectory(audio)
 add_subdirectory(timeline)
 add_subdirectory(project)
 add_subdirectory(codec)

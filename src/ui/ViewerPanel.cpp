@@ -145,6 +145,8 @@ void ViewerPanel::setSource(const Project* project, std::string timelineId) {
 }
 
 bool ViewerPanel::isPlaying() const { return engine_->isRunning(); }
+
+std::optional<render::MixMeters> ViewerPanel::meters() const { return engine_->meters(); }
 const QImage& ViewerPanel::currentImage() const { return view_->image(); }
 
 void ViewerPanel::setPosition(FrameIndex frame) {

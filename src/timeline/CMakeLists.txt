@@ -5,4 +5,4 @@ up_add_module(up_timeline
         ThreePointEdit.cpp
         Transitions.cpp
         Timeline.cpp
-    DEPS up_core)
+    DEPS up_core up_audio)
