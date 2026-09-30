@@ -33,6 +33,17 @@ Every operation is **all-or-nothing**: it runs on a copy, validates, and commits
 | `moveClip` | Moves to a position/track of the same kind with overwrite semantics |
 | `insertGap`, `clearRange` | Building blocks for sync-locked edits |
 
+## Selection and multi-clip edits
+
+The timeline UI keeps a selection *set* (Ctrl-click toggles, Shift-click adds, dragging a box on empty space selects what it touches, plus Select All, Select Forward from Playhead and Deselect All). Linked partners are implied. Session APIs take lists and are one undo step each:
+- `moveClips(ids, delta, trackShift, kind)`: every clip (and partner) moves by `delta`, and clips of the dragged kind also move `trackShift` tracks. The moved clips are lifted first, so they never overwrite each other; they overwrite anything else at their destinations.
+- `liftClips`, `rippleDeleteClips`: ripple deletes run from the latest clip back, closing each gap on the clip's own track (not sync-locked across other tracks).
+- Copy, cut and duplicate already take lists.
+
+## Tracks
+
+`addTrack` (above the others of its kind, first free `V<n>`/`A<n>` name), `removeTrack` (refuses the last track of a kind and locked tracks; a track with clips needs explicit confirmation; targets move to the first remaining track; partners of removed clips are unlinked), `renameTrack` (non-empty, unique), `moveTrack` (reorders within the kind). All are undoable and available from the track header's context menu (double-click a header to rename) and the `track` CLI command.
+
 ## Markers
 
 - **Timeline markers** sit at a timeline frame and do not move when clips are edited (as in most NLEs). They can span a range (`duration`) and carry a name, comment and colour.

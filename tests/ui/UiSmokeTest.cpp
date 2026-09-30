@@ -357,6 +357,67 @@ TEST(Ui, ClipboardAndMarkersThroughMenus) {
     }
 }
 
+TEST(Ui, MultiSelectionMarqueeAndTracks) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 50));
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 40));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1280, 800);
+    auto session = EditorSession::createNew("Sel", SequenceSettings{FrameRate{25, 1}, 320, 240, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());  // V1/A1 [0,50)
+    ASSERT_TRUE(session->appendMedia(ids[1]).ok());  // V1/A1 [50,90)
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    ui::TimelineView* tv = window.timeline();
+    tv->setPixelsPerFrame(8.0);
+    tv->setScrollFrame(0);
+    const Timeline& tl = window.session()->timeline();
+    const std::string red = tl.tracks[0].clips[0].id;
+    const std::string blue = tl.tracks[0].clips[1].id;
+
+    // Ctrl-click builds a selection; linked audio is implied.
+    QTest::mouseClick(tv, Qt::LeftButton, Qt::ControlModifier, tv->clipRect(red).center());
+    QTest::mouseClick(tv, Qt::LeftButton, Qt::ControlModifier, tv->clipRect(blue).center());
+    EXPECT_EQ(tv->selectedClipIds().size(), 2u);
+    EXPECT_TRUE(tv->isSelected(tl.tracks[2].clips[0].id));
+
+    // Dragging one selected clip moves the whole selection (and partners) by 10 frames.
+    const QPoint grab = tv->clipRect(red).center();
+    QTest::mousePress(tv, Qt::LeftButton, Qt::NoModifier, grab);
+    QTest::mouseMove(tv, grab + QPoint(40, 0));
+    QTest::mouseMove(tv, grab + QPoint(80, 0));
+    QTest::mouseRelease(tv, Qt::LeftButton, Qt::NoModifier, grab + QPoint(80, 0));
+    EXPECT_EQ(tl.clip(red)->start, 10);
+    EXPECT_EQ(tl.clip(blue)->start, 60);
+    EXPECT_EQ(tl.tracks[2].clips[1].start, 60);
+
+    // A marquee from empty space over the red clip selects just it (partner implied).
+    const QPoint from(tv->xForFrame(3), tv->rowTop(0) + 5);           // empty V2 row, before the clips
+    const QPoint to(tv->xForFrame(30), tv->rowTop(1) + 10);           // inside red on V1
+    QTest::mousePress(tv, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(tv, to);
+    QTest::mouseRelease(tv, Qt::LeftButton, Qt::NoModifier, to);
+    ASSERT_EQ(tv->selectedClipIds().size(), 1u);
+    EXPECT_EQ(tv->selectedClipIds()[0], red);
+
+    // Select All then Lift removes everything in one undo step.
+    findAction(&window, "Select All")->trigger();
+    EXPECT_EQ(tv->selectedClipIds().size(), 4u);
+    findAction(&window, "Lift (Delete Leaving Gap)")->trigger();
+    EXPECT_EQ(tl.duration(), 0);
+    window.session()->undo();
+    EXPECT_EQ(tl.tracks[0].clips.size(), 2u);
+
+    // Adding a track grows the timeline so every row stays visible.
+    const int before = tv->minimumHeight();
+    ASSERT_TRUE(window.session()->addTrack(TrackKind::Video).ok());
+    EXPECT_GT(tv->minimumHeight(), before);
+    EXPECT_EQ(tv->rowTrackIds().size(), 5u);
+}
+
 TEST(Ui, ThemesUseCentralTokens) {
     for (auto kind : {ui::ThemeKind::Dark, ui::ThemeKind::Light, ui::ThemeKind::HighContrast}) {
         ui::applyTheme(*qApp, kind);

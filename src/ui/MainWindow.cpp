@@ -149,6 +149,7 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
         assets_->prefetch(session_->project());
         mediaPool_->refresh();
         timeline()->update();
+        timeline()->tracksChanged();
         timeline()->viewChanged();
         viewer_->refresh();
         syncSourceAndMarks();
@@ -207,6 +208,17 @@ void MainWindow::buildMenus() {
     add(edit, tr("Paste"), QKeySequence::Paste, [this] { pasteClipboard(ops::EditMode::Overwrite); });
     add(edit, tr("Paste Insert"), QKeySequence("Ctrl+Shift+V"), [this] { pasteClipboard(ops::EditMode::Insert); });
     add(edit, tr("Duplicate"), QKeySequence("Ctrl+D"), &MainWindow::duplicateSelection);
+    edit->addSeparator();
+    add(edit, tr("Select All"), QKeySequence::SelectAll, [this] {
+        std::vector<std::string> all;
+        for (const auto& t : session_->timeline().tracks)
+            if (!t.locked)
+                for (const auto& c : t.clips) all.push_back(c.id);
+        timeline()->setSelection(std::move(all));
+    });
+    add(edit, tr("Select Forward from Playhead"), QKeySequence("Ctrl+Alt+A"),
+        [this] { timeline()->setSelection(session_->clipsFrom(viewer_->position())); });
+    add(edit, tr("Deselect All"), QKeySequence("Ctrl+Shift+A"), [this] { timeline()->setSelection({}); });
     edit->addSeparator();
     add(edit, tr("Razor at Playhead"), QKeySequence("Ctrl+K"), &MainWindow::razor);
     add(edit, tr("Lift (Delete Leaving Gap)"), QKeySequence(Qt::Key_Delete), [this] { deleteSelected(false); });
@@ -508,9 +520,12 @@ void MainWindow::razor() {
 }
 
 void MainWindow::deleteSelected(bool ripple) {
-    const QString id = selectedClipOrWarn();
-    if (id.isEmpty()) return;
-    runEdit([&] { return ripple ? session_->rippleDeleteClip(id.toStdString()) : session_->liftClip(id.toStdString()); });
+    const auto clips = selectedClips();
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select a clip in the timeline first."), 3000);
+        return;
+    }
+    runEdit([&] { return ripple ? session_->rippleDeleteClips(clips) : session_->liftClips(clips); });
     timeline()->selectClip({});
 }
 
@@ -643,9 +658,10 @@ bool MainWindow::threePointEdit(ops::EditMode mode) {
 }
 
 std::vector<std::string> MainWindow::selectedClips() const {
-    const std::string id = timeline()->selectedClipId().toStdString();
-    if (id.empty() || !session_->timeline().clip(id)) return {};
-    return {id};  // linked partners are added by the session
+    std::vector<std::string> out;
+    for (const auto& id : timeline()->selectedClipIds())
+        if (session_->timeline().clip(id)) out.push_back(id);
+    return out;  // linked partners are added by the session
 }
 
 void MainWindow::copySelection(bool cut) {

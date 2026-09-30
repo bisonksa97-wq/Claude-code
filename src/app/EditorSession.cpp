@@ -292,20 +292,98 @@ Result<int> EditorSession::razorAt(FrameIndex frame) {
     return cuts;
 }
 
-Status EditorSession::liftClip(const std::string& clipId) {
-    return editTimeline("Lift", [&](Timeline& t) -> Status {
-        if (!t.clip(clipId)) return clipNotFound(clipId);
-        for (const auto& id : editableGroup(t, clipId)) UP_TRY(ops::lift(t, id));
+Status EditorSession::liftClip(const std::string& clipId) { return liftClips({clipId}); }
+
+Status EditorSession::rippleDeleteClip(const std::string& clipId) { return rippleDeleteClips({clipId}); }
+
+namespace {
+
+// The clips plus their linked partners on unlocked tracks, without duplicates.
+Result<std::vector<std::string>> expandSelection(const Timeline& t, const std::vector<std::string>& clipIds) {
+    std::vector<std::string> out;
+    for (const auto& id : clipIds) {
+        if (!t.clip(id)) return clipNotFound(id);
+        for (const auto& member : editableGroup(t, id))
+            if (std::find(out.begin(), out.end(), member) == out.end()) out.push_back(member);
+    }
+    if (out.empty()) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "No clips are selected.", "Select a clip first.");
+    }
+    return out;
+}
+
+}  // namespace
+
+Status EditorSession::liftClips(const std::vector<std::string>& clipIds) {
+    return editTimeline(clipIds.size() > 1 ? "Lift Clips" : "Lift", [&](Timeline& t) -> Status {
+        auto ids = expandSelection(t, clipIds);
+        if (!ids.ok()) return ids.error();
+        for (const auto& id : ids.value()) UP_TRY(ops::lift(t, id));
         return Status::success();
     });
 }
 
-Status EditorSession::rippleDeleteClip(const std::string& clipId) {
-    return editTimeline("Ripple Delete", [&](Timeline& t) -> Status {
-        if (!t.clip(clipId)) return clipNotFound(clipId);
-        for (const auto& id : editableGroup(t, clipId)) UP_TRY(ops::rippleDelete(t, id));
+Status EditorSession::rippleDeleteClips(const std::vector<std::string>& clipIds) {
+    return editTimeline(clipIds.size() > 1 ? "Ripple Delete Clips" : "Ripple Delete", [&](Timeline& t) -> Status {
+        auto ids = expandSelection(t, clipIds);
+        if (!ids.ok()) return ids.error();
+        // Latest first, so each ripple leaves the positions of the remaining clips valid.
+        std::vector<std::string> order = ids.value();
+        std::sort(order.begin(), order.end(),
+                  [&](const std::string& a, const std::string& b) { return t.clip(a)->start > t.clip(b)->start; });
+        for (const auto& id : order) UP_TRY(ops::rippleDelete(t, id));
         return Status::success();
     });
+}
+
+Status EditorSession::moveClips(const std::vector<std::string>& clipIds, FrameIndex delta, int trackShift,
+                                TrackKind trackShiftKind) {
+    return editTimeline(clipIds.size() > 1 ? "Move Clips" : "Move Clip", [&](Timeline& t) -> Status {
+        auto ids = expandSelection(t, clipIds);
+        if (!ids.ok()) return ids.error();
+        struct Planned {
+            Clip clip;
+            std::string track;
+        };
+        std::vector<Planned> planned;
+        for (const auto& id : ids.value()) {
+            const Track* from = t.trackOfClip(id);
+            std::string dest = from->id;
+            if (trackShift != 0 && from->kind == trackShiftKind) {
+                const auto list = t.trackIdsOfKind(from->kind);
+                const auto index = (std::find(list.begin(), list.end(), from->id) - list.begin()) + trackShift;
+                if (index < 0 || index >= static_cast<std::ptrdiff_t>(list.size())) {
+                    return makeError(ErrorCode::OutOfRange, "timeline", "There is no track to move the clips to.",
+                                     "Move them fewer tracks, or add a track first.");
+                }
+                dest = list[static_cast<std::size_t>(index)];
+            }
+            Clip moved = *t.clip(id);
+            moved.start += delta;
+            if (moved.start < 0) {
+                return makeError(ErrorCode::OutOfRange, "timeline", "Clips cannot be moved before the start of the timeline.",
+                                 "Use a smaller move.");
+            }
+            planned.push_back({std::move(moved), dest});
+        }
+        // Take every moved clip out first so they cannot overwrite each other.
+        for (const auto& p : planned) UP_TRY(ops::lift(t, p.clip.id));
+        for (auto& p : planned) {
+            auto placed = ops::placeClip(t, p.track, p.clip, ops::EditMode::Overwrite);
+            if (!placed.ok()) return placed.error();
+        }
+        return Status::success();
+    });
+}
+
+std::vector<std::string> EditorSession::clipsFrom(FrameIndex frame) const {
+    std::vector<std::string> out;
+    for (const auto& track : timeline().tracks) {
+        if (track.locked) continue;
+        for (const auto& c : track.clips)
+            if (c.start >= frame) out.push_back(c.id);
+    }
+    return out;
 }
 
 Status EditorSession::trimClip(const std::string& clipId, ops::Edge edge, FrameIndex delta, ops::TrimMode mode) {
@@ -745,6 +823,112 @@ Result<std::vector<std::string>> EditorSession::placeClipboard(const Clipboard& 
     });
     if (!status.ok()) return status.error();
     return placed;
+}
+
+// --- Tracks -------------------------------------------------------------------------------
+
+namespace {
+
+Error trackNotFound() {
+    return makeError(ErrorCode::NotFound, "timeline", "The track does not exist.", "Refresh the timeline view and try again.");
+}
+
+bool nameTaken(const Timeline& t, const std::string& name, const std::string& exceptId) {
+    return std::any_of(t.tracks.begin(), t.tracks.end(),
+                       [&](const Track& tr) { return tr.name == name && tr.id != exceptId; });
+}
+
+}  // namespace
+
+Result<std::string> EditorSession::addTrack(TrackKind kind, std::string name) {
+    std::string id;
+    const Status s = editTimeline("Add Track", [&](Timeline& t) -> Status {
+        if (!name.empty() && nameTaken(t, name, {})) {
+            return makeError(ErrorCode::Conflict, "timeline", "A track named '" + name + "' already exists.",
+                             "Choose a different name.");
+        }
+        Track& track = t.addTrack(kind);
+        if (!name.empty()) track.name = name;
+        id = track.id;
+        // A timeline that had no target for this kind starts targeting the new track.
+        std::string& target = kind == TrackKind::Video ? t.videoTarget : t.audioTarget;
+        if (target.empty() && t.trackIdsOfKind(kind).size() == 1) target = id;
+        return Status::success();
+    });
+    if (!s.ok()) return s.error();
+    return id;
+}
+
+Status EditorSession::removeTrack(const std::string& trackId, bool evenIfNotEmpty) {
+    return editTimeline("Delete Track", [&](Timeline& t) -> Status {
+        const Track* track = t.track(trackId);
+        if (!track) return trackNotFound();
+        if (track->locked) {
+            return makeError(ErrorCode::Locked, "timeline", "Track " + track->name + " is locked.", "Unlock it before deleting it.");
+        }
+        if (t.trackIdsOfKind(track->kind).size() <= 1) {
+            return makeError(ErrorCode::InvalidArgument, "timeline",
+                             "A timeline needs at least one " + std::string(toString(track->kind)) + " track.",
+                             "Add another track before deleting this one.");
+        }
+        if (!track->clips.empty() && !evenIfNotEmpty) {
+            return makeError(ErrorCode::Conflict, "timeline",
+                             "Track " + track->name + " contains " + std::to_string(track->clips.size()) + " clip(s).",
+                             "Confirm the deletion to remove the track together with its clips.");
+        }
+        const TrackKind kind = track->kind;
+        // Linked partners of removed clips become unlinked.
+        std::vector<std::string> links;
+        for (const auto& c : track->clips)
+            if (!c.linkId.empty()) links.push_back(c.linkId);
+        t.tracks.erase(std::find_if(t.tracks.begin(), t.tracks.end(), [&](const Track& tr) { return tr.id == trackId; }));
+        for (auto& tr : t.tracks)
+            for (auto& c : tr.clips)
+                if (std::find(links.begin(), links.end(), c.linkId) != links.end() && t.linkedClips(c.id).empty())
+                    c.linkId.clear();
+        std::string& target = kind == TrackKind::Video ? t.videoTarget : t.audioTarget;
+        if (target == trackId) target = t.trackIdsOfKind(kind).front();
+        return Status::success();
+    });
+}
+
+Status EditorSession::renameTrack(const std::string& trackId, const std::string& name) {
+    return editTimeline("Rename Track", [&](Timeline& t) -> Status {
+        Track* track = t.track(trackId);
+        if (!track) return trackNotFound();
+        if (name.empty()) return makeError(ErrorCode::InvalidArgument, "timeline", "A track name cannot be empty.");
+        if (nameTaken(t, name, trackId)) {
+            return makeError(ErrorCode::Conflict, "timeline", "A track named '" + name + "' already exists.",
+                             "Choose a different name.");
+        }
+        track->name = name;
+        return Status::success();
+    });
+}
+
+Status EditorSession::moveTrack(const std::string& trackId, int index) {
+    return editTimeline("Move Track", [&](Timeline& t) -> Status {
+        const Track* track = t.track(trackId);
+        if (!track) return trackNotFound();
+        const TrackKind kind = track->kind;
+        // Reorder the tracks of this kind within the slots they already occupy.
+        std::vector<std::size_t> slots;
+        std::vector<Track> ofKind;
+        for (std::size_t i = 0; i < t.tracks.size(); ++i) {
+            if (t.tracks[i].kind != kind) continue;
+            slots.push_back(i);
+            ofKind.push_back(t.tracks[i]);
+        }
+        if (index < 0 || index >= static_cast<int>(ofKind.size())) {
+            return makeError(ErrorCode::OutOfRange, "timeline", "There is no track position " + std::to_string(index + 1) + ".");
+        }
+        auto it = std::find_if(ofKind.begin(), ofKind.end(), [&](const Track& tr) { return tr.id == trackId; });
+        Track moving = *it;
+        ofKind.erase(it);
+        ofKind.insert(ofKind.begin() + index, std::move(moving));
+        for (std::size_t i = 0; i < slots.size(); ++i) t.tracks[slots[i]] = std::move(ofKind[i]);
+        return Status::success();
+    });
 }
 
 }  // namespace up

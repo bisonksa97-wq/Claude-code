@@ -2,7 +2,9 @@
 
 #include <QDragEnterEvent>
 #include <QContextMenuEvent>
+#include <QInputDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -40,13 +42,10 @@ TimelineView::TimelineView(QWidget* parent) : QWidget(parent) {
 
 void TimelineView::setSession(EditorSession* session) {
     session_ = session;
-    selected_.clear();
+    selection_.clear();
     playhead_ = 0;
     scroll_ = 0;
-    const auto m = metricsFor(this);
-    const int rows = session_ ? static_cast<int>(session_->timeline().tracks.size()) : 2;
-    setMinimumHeight(m.rulerHeight + m.trackHeight * rows);
-    update();
+    tracksChanged();
     emit viewChanged();
 }
 
@@ -122,10 +121,47 @@ void TimelineView::setPlayhead(FrameIndex frame) {
     update();
 }
 
-void TimelineView::selectClip(const QString& clipId) {
-    selected_ = clipId.toStdString();
+void TimelineView::tracksChanged() {
+    const auto m = metricsFor(this);
+    const int rows = session_ ? static_cast<int>(session_->timeline().tracks.size()) : 2;
+    setMinimumHeight(m.rulerHeight + m.trackHeight * rows);
+    // Drop selected clips that no longer exist (undo, track deletion...).
+    if (session_) {
+        selection_.erase(std::remove_if(selection_.begin(), selection_.end(),
+                                        [&](const std::string& id) { return !session_->timeline().clip(id); }),
+                         selection_.end());
+    }
     update();
-    emit selectionChanged(clipId);
+}
+
+void TimelineView::selectClip(const QString& clipId) {
+    setSelection(clipId.isEmpty() ? std::vector<std::string>{} : std::vector<std::string>{clipId.toStdString()});
+}
+
+void TimelineView::setSelection(std::vector<std::string> clipIds) {
+    selection_ = std::move(clipIds);
+    update();
+    emit selectionChanged(selectedClipId());
+}
+
+bool TimelineView::isSelected(const std::string& clipId) const {
+    if (std::find(selection_.begin(), selection_.end(), clipId) != selection_.end()) return true;
+    if (!session_) return false;
+    const Clip* c = session_->timeline().clip(clipId);
+    if (!c || c->linkId.empty()) return false;
+    return std::any_of(selection_.begin(), selection_.end(), [&](const std::string& id) {
+        const Clip* s = session_->timeline().clip(id);
+        return s && s->linkId == c->linkId;
+    });
+}
+
+std::vector<std::string> TimelineView::selectionWithPartners() const {
+    std::vector<std::string> out;
+    if (!session_) return out;
+    for (const auto& t : session_->timeline().tracks)
+        for (const auto& c : t.clips)
+            if (isSelected(c.id)) out.push_back(c.id);
+    return out;
 }
 
 QRect TimelineView::clipRect(const std::string& clipId) const {
@@ -245,16 +281,39 @@ void TimelineView::mousePressEvent(QMouseEvent* event) {
         handleHeaderClick(event->pos());
         return;
     }
+    const bool toggle = event->modifiers() & Qt::ControlModifier;
+    const bool extend = event->modifiers() & Qt::ShiftModifier;
     const auto hit = hitTest(event->pos());
     if (!hit) {
-        selectClip({});
+        // Empty space: start a marquee (Ctrl/Shift add to the current selection).
+        drag_ = DragKind::Marquee;
+        marqueeAdds_ = toggle || extend;
+        if (!marqueeAdds_) setSelection({});
+        marquee_ = QRect(event->pos(), QSize(1, 1));
         return;
     }
-    selectClip(QString::fromStdString(hit->clipId));
+    if (toggle) {
+        std::vector<std::string> next = selection_;
+        auto it = std::find(next.begin(), next.end(), hit->clipId);
+        if (it != next.end()) next.erase(it);
+        else next.push_back(hit->clipId);
+        setSelection(std::move(next));
+        return;  // Ctrl-click only changes the selection
+    }
+    if (extend && hit->zone == Zone::Body) {
+        if (!isSelected(hit->clipId)) {
+            std::vector<std::string> next = selection_;
+            next.push_back(hit->clipId);
+            setSelection(std::move(next));
+        }
+    } else if (!isSelected(hit->clipId) || hit->zone != Zone::Body) {
+        selectClip(QString::fromStdString(hit->clipId));  // trims always address one clip
+    }
     dragClip_ = hit->clipId;
     pressFrame_ = frameForX(event->pos().x());
     dragDelta_ = 0;
     dragRow_ = rowAt(event->pos().y());
+    pressRow_ = dragRow_;
     dragRipple_ = event->modifiers() & Qt::ShiftModifier;
     drag_ = hit->zone == Zone::In ? DragKind::TrimIn : hit->zone == Zone::Out ? DragKind::TrimOut : DragKind::Move;
 }
@@ -272,17 +331,28 @@ void TimelineView::mouseMoveEvent(QMouseEvent* event) {
         emit playheadMoved(f);
         return;
     }
+    if (drag_ == DragKind::Marquee) {
+        marquee_ = QRect(pressPos_, event->pos()).normalized();
+        update();
+        return;
+    }
     const Clip* clip = session_->timeline().clip(dragClip_);
     if (!clip) return;
     std::vector<std::string> exclude = session_->timeline().linkedClips(dragClip_);
     exclude.push_back(dragClip_);
+    // Moving clips never snap to themselves.
+    if (drag_ == DragKind::Move)
+        for (const auto& id : selectionWithPartners()) exclude.push_back(id);
     const FrameIndex raw = frameForX(event->pos().x()) - pressFrame_;
     if (drag_ == DragKind::Move) {
         // Snap whichever edge of the moved clip lands closer to an edit point.
         const FrameIndex startSnap = snap(clip->start + raw, exclude) - clip->start;
         const FrameIndex endSnap = snap(clip->end() + raw, exclude) - clip->end();
         dragDelta_ = std::abs(startSnap - raw) <= std::abs(endSnap - raw) ? startSnap : endSnap;
-        dragDelta_ = std::max(dragDelta_, -clip->start);
+        FrameIndex earliest = clip->start;
+        for (const auto& id : selectionWithPartners())
+            if (const Clip* c = session_->timeline().clip(id)) earliest = std::min(earliest, c->start);
+        dragDelta_ = std::max(dragDelta_, -earliest);
         const int row = rowAt(event->pos().y());
         if (row >= 0) dragRow_ = row;
     } else {
@@ -301,16 +371,32 @@ void TimelineView::mouseReleaseEvent(QMouseEvent* event) {
         update();
         return;
     }
+    if (kind == DragKind::Marquee) {
+        std::vector<std::string> next = marqueeAdds_ ? selection_ : std::vector<std::string>{};
+        for (const auto& t : session_->timeline().tracks)
+            for (const auto& c : t.clips)
+                if (clipRect(c.id).intersects(marquee_) && !isSelected(c.id)) next.push_back(c.id);
+        marquee_ = QRect();
+        setSelection(std::move(next));
+        return;
+    }
     const Clip* clip = session_->timeline().clip(dragClip_);
     const auto rows = rowTrackIds();
     Status st = Status::success();
     if (clip && kind == DragKind::Move) {
-        const std::string target = dragRow_ >= 0 ? rows[static_cast<std::size_t>(dragRow_)] : session_->timeline().trackOfClip(dragClip_)->id;
-        const Track* targetTrack = session_->timeline().track(target);
-        const Track* sourceTrack = session_->timeline().trackOfClip(dragClip_);
-        const bool sameKind = targetTrack && sourceTrack && targetTrack->kind == sourceTrack->kind;
-        if (dragDelta_ != 0 || (sameKind && target != sourceTrack->id))
-            st = session_->moveClip(dragClip_, sameKind ? target : sourceTrack->id, clip->start + dragDelta_);
+        // Track shift within the dragged clip's kind, from the rows it was dragged across.
+        const Timeline& tl = session_->timeline();
+        const Track* sourceTrack = tl.trackOfClip(dragClip_);
+        const Track* targetTrack = dragRow_ >= 0 ? tl.track(rows[static_cast<std::size_t>(dragRow_)]) : sourceTrack;
+        int shift = 0;
+        if (targetTrack && targetTrack->kind == sourceTrack->kind) {
+            const auto ids = tl.trackIdsOfKind(sourceTrack->kind);
+            shift = static_cast<int>((std::find(ids.begin(), ids.end(), targetTrack->id) - ids.begin()) -
+                                     (std::find(ids.begin(), ids.end(), sourceTrack->id) - ids.begin()));
+        }
+        std::vector<std::string> moving = selection_;
+        if (std::find(moving.begin(), moving.end(), dragClip_) == moving.end()) moving.push_back(dragClip_);
+        if (dragDelta_ != 0 || shift != 0) st = session_->moveClips(moving, dragDelta_, shift, sourceTrack->kind);
     } else if (clip && dragDelta_ != 0) {
         st = session_->trimClip(dragClip_, kind == DragKind::TrimIn ? ops::Edge::In : ops::Edge::Out, dragDelta_,
                                 dragRipple_ ? ops::TrimMode::Ripple : ops::TrimMode::Normal);
@@ -391,11 +477,80 @@ std::string TimelineView::markerAt(const QPoint& pos) const {
 }
 
 void TimelineView::mouseDoubleClickEvent(QMouseEvent* event) {
+    const int row = rowAt(event->pos().y());
+    if (session_ && row >= 0 && event->pos().x() < metricsFor(this).trackHeaderWidth &&
+        !targetRect(row).contains(event->pos())) {
+        renameTrackInteractively(rowTrackIds()[static_cast<std::size_t>(row)]);
+        return;
+    }
     const std::string id = markerAt(event->pos());
     if (!id.empty()) emit markerEditRequested(QString::fromStdString(id));
 }
 
+void TimelineView::renameTrackInteractively(const std::string& trackId) {
+    const Track* track = session_->timeline().track(trackId);
+    if (!track) return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("Rename Track"), tr("Track name:"), QLineEdit::Normal,
+                                               QString::fromStdString(track->name), &ok);
+    if (!ok) return;
+    Status st = session_->renameTrack(trackId, name.trimmed().toStdString());
+    if (!st.ok()) report(errorText(st.error()));
+}
+
+void TimelineView::showTrackMenu(const std::string& trackId, const QPoint& globalPos) {
+    const Timeline& tl = session_->timeline();
+    const Track* track = tl.track(trackId);
+    if (!track) return;
+    const auto sameKind = tl.trackIdsOfKind(track->kind);
+    const int index = static_cast<int>(std::find(sameKind.begin(), sameKind.end(), trackId) - sameKind.begin());
+    const TrackKind kind = track->kind;
+    auto run = [this](const Status& st) {
+        if (!st.ok()) report(errorText(st.error()));
+    };
+    QMenu menu(this);
+    menu.addAction(tr("Add Video Track"), this, [this, run] {
+        auto r = session_->addTrack(TrackKind::Video);
+        if (!r.ok()) run(r.error());
+    });
+    menu.addAction(tr("Add Audio Track"), this, [this, run] {
+        auto r = session_->addTrack(TrackKind::Audio);
+        if (!r.ok()) run(r.error());
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Rename Track…"), this, [this, trackId] { renameTrackInteractively(trackId); });
+    // "Up" means higher in the stack, which is a higher index for either kind's list
+    // but drawn above for video and below for audio.
+    QAction* up = menu.addAction(kind == TrackKind::Video ? tr("Move Track Up") : tr("Move Track Down"), this,
+                                 [this, run, trackId, index] { run(session_->moveTrack(trackId, index + 1)); });
+    up->setEnabled(index + 1 < static_cast<int>(sameKind.size()));
+    QAction* down = menu.addAction(kind == TrackKind::Video ? tr("Move Track Down") : tr("Move Track Up"), this,
+                                   [this, run, trackId, index] { run(session_->moveTrack(trackId, index - 1)); });
+    down->setEnabled(index > 0);
+    menu.addSeparator();
+    QAction* remove = menu.addAction(tr("Delete Track"), this, [this, run, trackId] {
+        const Track* t = session_->timeline().track(trackId);
+        if (!t) return;
+        bool force = false;
+        if (!t->clips.empty()) {
+            const auto answer = QMessageBox::question(
+                this, tr("Delete Track"),
+                tr("Track %1 contains %2 clip(s). Delete the track and its clips?").arg(QString::fromStdString(t->name)).arg(t->clips.size()));
+            if (answer != QMessageBox::Yes) return;
+            force = true;
+        }
+        run(session_->removeTrack(trackId, force));
+    });
+    remove->setEnabled(sameKind.size() > 1);
+    menu.exec(globalPos);
+}
+
 void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
+    const int row = rowAt(event->pos().y());
+    if (session_ && row >= 0 && event->pos().x() < metricsFor(this).trackHeaderWidth) {
+        showTrackMenu(rowTrackIds()[static_cast<std::size_t>(row)], event->globalPos());
+        return;
+    }
     const std::string id = markerAt(event->pos());
     if (id.empty()) return;
     QMenu menu(this);
@@ -468,9 +623,7 @@ void TimelineView::drawClip(QPainter& p, const Clip& clip, const QRect& r, bool 
             drawWaveform(p, clip, r, *peaks);
         }
     }
-    const bool selected = clip.id == selected_ ||
-                          (!selected_.empty() && !clip.linkId.empty() && session_->timeline().clip(selected_) &&
-                           session_->timeline().clip(selected_)->linkId == clip.linkId);
+    const bool selected = isSelected(clip.id);
     p.setPen(QPen(selected ? t.selection : fill.darker(150), selected ? 2 : 1));
     p.drawRect(r.adjusted(0, 0, -1, -1));
     if (r.right() - labelLeft > 16) {
@@ -579,13 +732,31 @@ void TimelineView::paintEvent(QPaintEvent*) {
     }
 
     // Drag previews.
-    if (drag_ == DragKind::Move || drag_ == DragKind::TrimIn || drag_ == DragKind::TrimOut) {
+    if (drag_ == DragKind::Marquee && !marquee_.isNull()) {
+        QColor fillColor = t.selection;
+        fillColor.setAlpha(40);
+        p.fillRect(marquee_, fillColor);
+        p.setPen(QPen(t.selection, 1, Qt::DashLine));
+        p.drawRect(marquee_);
+    }
+    if (drag_ == DragKind::Move && tl.clip(dragClip_)) {
+        const int dx = static_cast<int>(std::lround(static_cast<double>(dragDelta_) * pixelsPerFrame_));
+        const int dy = (dragRow_ >= 0 && pressRow_ >= 0) ? rowTop(dragRow_) - rowTop(pressRow_) : 0;
+        const TrackKind draggedKind = tl.trackOfClip(dragClip_)->kind;
+        p.setPen(QPen(t.selection, 2, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        std::vector<std::string> moving = selectionWithPartners();
+        if (std::find(moving.begin(), moving.end(), dragClip_) == moving.end()) moving.push_back(dragClip_);
+        for (const auto& id : moving) {
+            const Track* tr = tl.trackOfClip(id);
+            p.drawRect(clipRect(id).translated(dx, tr && tr->kind == draggedKind ? dy : 0));
+        }
+    }
+    if (drag_ == DragKind::TrimIn || drag_ == DragKind::TrimOut) {
         if (tl.clip(dragClip_)) {
             QRect r = clipRect(dragClip_);
             const int dx = static_cast<int>(std::lround(static_cast<double>(dragDelta_) * pixelsPerFrame_));
-            if (drag_ == DragKind::Move) {
-                r.translate(dx, dragRow_ >= 0 ? rowTop(dragRow_) + 2 - r.top() : 0);
-            } else if (drag_ == DragKind::TrimIn) {
+            if (drag_ == DragKind::TrimIn) {
                 r.setLeft(r.left() + dx);
             } else {
                 r.setRight(r.right() + dx);

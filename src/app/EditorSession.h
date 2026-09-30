@@ -99,6 +99,17 @@ public:
     Result<int> razorAt(FrameIndex frame);
     Status liftClip(const std::string& clipId);
     Status rippleDeleteClip(const std::string& clipId);
+    // Multi-clip versions (linked partners on unlocked tracks included; one undo step).
+    Status liftClips(const std::vector<std::string>& clipIds);
+    // Removes the clips and closes each gap on the clip's own track.
+    Status rippleDeleteClips(const std::vector<std::string>& clipIds);
+    // Moves clips (and partners) by `delta` frames; clips of `trackShiftKind` also move
+    // `trackShift` tracks up (+) or down (-) within their kind. The moved clips never
+    // overwrite each other; they overwrite anything else at their destinations.
+    Status moveClips(const std::vector<std::string>& clipIds, FrameIndex delta, int trackShift = 0,
+                     TrackKind trackShiftKind = TrackKind::Video);
+    // Clips starting at or after `frame` on unlocked tracks (for "select forward").
+    std::vector<std::string> clipsFrom(FrameIndex frame) const;
     Status trimClip(const std::string& clipId, ops::Edge edge, FrameIndex delta, ops::TrimMode mode);
     Status rollEdit(const std::string& leftClipId, FrameIndex delta);
     Status slipClip(const std::string& clipId, FrameIndex delta);
@@ -106,6 +117,17 @@ public:
     // Moves a clip (and its linked partners by the same offset) to `trackId` at `newStart`.
     Status moveClip(const std::string& clipId, const std::string& trackId, FrameIndex newStart);
     Status setTrackState(const std::string& trackId, const TrackState& state);
+
+    // --- Tracks ------------------------------------------------------------------------
+    // Adds a track above the others of its kind. Returns its id.
+    Result<std::string> addTrack(TrackKind kind, std::string name = {});
+    // Removes a track. A track holding clips is only removed with `evenIfNotEmpty`; the
+    // last track of a kind cannot be removed. Targets on it move to the first remaining track.
+    Status removeTrack(const std::string& trackId, bool evenIfNotEmpty = false);
+    // Names must be non-empty and unique in the timeline.
+    Status renameTrack(const std::string& trackId, const std::string& name);
+    // Moves a track to `index` among the tracks of its kind (0 = V1/A1).
+    Status moveTrack(const std::string& trackId, int index);
 
     // --- Three-point editing ------------------------------------------------------
     // Source marks, in timeline frames from the start of the media (nullopt clears a mark).

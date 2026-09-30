@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 5._
+_Last updated: session 6._
 
 ## First vertical slice (§90)
 
@@ -30,7 +30,7 @@ _Last updated: session 5._
 | 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
 | 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims, **source monitor with three-point insert/overwrite** (I/O marks, `,` and `.`), source patching. No Cut workspace, no match frame, no J/K/L. |
 | 4 | Multicam | NOT IMPLEMENTED | |
-| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks, track targeting, timeline and clip markers (dialog, navigation) and copy/cut/paste/duplicate. Missing: multi-clip selection, a markers list panel, paste attributes, adding/removing tracks in the UI, nesting. |
+| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks, track targeting, timeline and clip markers (dialog, navigation) and copy/cut/paste/duplicate. Also multi-clip selection (Ctrl/Shift-click, box selection, select all/forward) with group move and delete, and track add/remove/rename/reorder. Missing: a markers list panel, paste attributes, nesting/compound clips. |
 | 6 | Text-based editing | NOT IMPLEMENTED | |
 | 7–15 | Motion graphics, 2D/3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |

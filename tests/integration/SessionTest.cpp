@@ -368,3 +368,82 @@ TEST_F(SessionTest, PasteRejectsImpossibleDestinations) {
     EXPECT_FALSE(session->paste(100, ops::EditMode::Overwrite).ok());
 }
 
+
+TEST_F(SessionTest, MultiClipMoveNeverOverwritesItself) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // [0,50)
+    ASSERT_TRUE(session->appendMedia(b).ok());  // [50,90)
+    const std::string first = track(0).clips[0].id;
+    const std::string second = track(0).clips[1].id;
+    // Moving both right by 20: the first lands where the second was, but neither is lost.
+    ASSERT_TRUE(session->moveClips({first, second}, 20).ok());
+    ASSERT_EQ(track(0).clips.size(), 2u);
+    EXPECT_EQ(session->timeline().clip(first)->start, 20);
+    EXPECT_EQ(session->timeline().clip(second)->start, 70);
+    EXPECT_EQ(track(2).clips[0].start, 20);  // linked audio followed
+    // Up one video track: video goes to V2, audio stays on A1.
+    ASSERT_TRUE(session->moveClips({first}, 0, 1, TrackKind::Video).ok());
+    EXPECT_EQ(session->timeline().trackOfClip(first)->id, track(1).id);
+    EXPECT_EQ(track(2).clips.size(), 2u);
+    EXPECT_EQ(session->moveClips({first}, 0, 1, TrackKind::Video).error().code, ErrorCode::OutOfRange);  // no V3
+    EXPECT_EQ(session->moveClips({second}, -100).error().code, ErrorCode::OutOfRange);
+    session->undo();
+    session->undo();
+    EXPECT_EQ(session->timeline().clip(first)->start, 0);
+    EXPECT_EQ(session->timeline().clip(second)->start, 50);
+}
+
+TEST_F(SessionTest, MultiClipLiftAndRippleDelete) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // [0,50)
+    ASSERT_TRUE(session->appendMedia(b).ok());  // [50,90)
+    ASSERT_TRUE(session->appendMedia(a).ok());  // [90,140)
+    const std::string c0 = track(0).clips[0].id;
+    const std::string c1 = track(0).clips[1].id;
+    ASSERT_TRUE(session->rippleDeleteClips({c0, c1}).ok());
+    ASSERT_EQ(track(0).clips.size(), 1u);
+    EXPECT_EQ(track(0).clips[0].start, 0);  // both gaps closed
+    EXPECT_EQ(track(2).clips[0].start, 0);
+    session->undo();
+    ASSERT_TRUE(session->liftClips({c0, track(0).clips[2].id}).ok());
+    ASSERT_EQ(track(0).clips.size(), 1u);
+    EXPECT_EQ(track(0).clips[0].start, 50);  // gaps left
+    EXPECT_EQ(session->clipsFrom(50).size(), 2u);  // the remaining clip and its audio
+    EXPECT_FALSE(session->liftClips({}).ok());
+}
+
+TEST_F(SessionTest, TrackAddRemoveRenameReorder) {
+    auto v3 = session->addTrack(TrackKind::Video);
+    ASSERT_TRUE(v3.ok());
+    EXPECT_EQ(session->timeline().track(v3.value())->name, "V3");
+    auto named = session->addTrack(TrackKind::Audio, "Music");
+    ASSERT_TRUE(named.ok());
+    EXPECT_FALSE(session->addTrack(TrackKind::Audio, "Music").ok());  // names are unique
+
+    // Remove V2 (empty), then adding again reuses the free name instead of duplicating V3.
+    ASSERT_TRUE(session->removeTrack(track(1).id).ok());
+    auto again = session->addTrack(TrackKind::Video);
+    EXPECT_EQ(session->timeline().track(again.value())->name, "V2");
+
+    // A targeted track with clips needs confirmation; removal retargets and unlinks partners.
+    ASSERT_TRUE(session->appendMedia(a).ok());
+    const std::string v1 = session->timeline().trackIdsOfKind(TrackKind::Video)[0];
+    EXPECT_EQ(session->removeTrack(v1).error().code, ErrorCode::Conflict);
+    ASSERT_TRUE(session->removeTrack(v1, true).ok());
+    const Timeline& tl = session->timeline();
+    EXPECT_EQ(tl.videoTarget, tl.trackIdsOfKind(TrackKind::Video).front());
+    EXPECT_TRUE(tl.tracksOfKind(TrackKind::Audio)[0]->clips[0].linkId.empty());
+
+    ASSERT_TRUE(session->renameTrack(tl.trackIdsOfKind(TrackKind::Audio)[0], "Dialogue").ok());
+    EXPECT_FALSE(session->renameTrack(tl.trackIdsOfKind(TrackKind::Audio)[0], "Music").ok());
+    EXPECT_FALSE(session->renameTrack(tl.trackIdsOfKind(TrackKind::Audio)[0], "").ok());
+
+    // Move Music to the bottom of the audio tracks.
+    ASSERT_TRUE(session->moveTrack(named.value(), 0).ok());
+    EXPECT_EQ(tl.tracksOfKind(TrackKind::Audio)[0]->name, "Music");
+    EXPECT_FALSE(session->moveTrack(named.value(), 9).ok());
+    EXPECT_TRUE(tl.validate().ok());
+
+    // The last track of a kind cannot go.
+    while (tl.trackIdsOfKind(TrackKind::Video).size() > 1)
+        ASSERT_TRUE(session->removeTrack(tl.trackIdsOfKind(TrackKind::Video).back(), true).ok());
+    EXPECT_EQ(session->removeTrack(tl.trackIdsOfKind(TrackKind::Video)[0], true).error().code, ErrorCode::InvalidArgument);
+}

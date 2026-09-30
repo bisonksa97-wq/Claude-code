@@ -39,8 +39,14 @@ public:
         update();
     }
     FrameIndex playhead() const { return playhead_; }
-    QString selectedClipId() const { return QString::fromStdString(selected_); }
-    void selectClip(const QString& clipId);
+    // Selection: a set of clips (their linked partners are implied and drawn selected).
+    QString selectedClipId() const { return selection_.empty() ? QString() : QString::fromStdString(selection_.front()); }
+    const std::vector<std::string>& selectedClipIds() const { return selection_; }
+    void selectClip(const QString& clipId);  // replaces the selection (empty = clear)
+    void setSelection(std::vector<std::string> clipIds);
+    bool isSelected(const std::string& clipId) const;  // directly or through a link
+    // Recomputes the layout after tracks were added or removed.
+    void tracksChanged();
 
     double pixelsPerFrame() const { return pixelsPerFrame_; }
     void setPixelsPerFrame(double ppf);
@@ -87,7 +93,7 @@ protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
 
 private:
-    enum class DragKind { None, Scrub, Move, TrimIn, TrimOut };
+    enum class DragKind { None, Scrub, Move, TrimIn, TrimOut, Marquee };
     enum class Zone { Body, In, Out };
     struct Hit {
         std::string clipId;
@@ -98,6 +104,9 @@ private:
     std::optional<Hit> hitTest(const QPoint& pos) const;
     FrameIndex snap(FrameIndex frame, const std::vector<std::string>& exclude) const;
     bool handleHeaderClick(const QPoint& pos);
+    void showTrackMenu(const std::string& trackId, const QPoint& globalPos);
+    void renameTrackInteractively(const std::string& trackId);
+    std::vector<std::string> selectionWithPartners() const;
     void report(const QString& message);
     void drawTrackHeader(QPainter& p, const Track& track, int row) const;
     void drawClip(QPainter& p, const Clip& clip, const QRect& r, bool isVideo) const;
@@ -113,7 +122,10 @@ private:
     FrameIndex playhead_ = 0;
     FrameIndex scroll_ = 0;
     double pixelsPerFrame_ = 4.0;
-    std::string selected_;
+    std::vector<std::string> selection_;
+    QRect marquee_;
+    bool marqueeAdds_ = false;
+    int pressRow_ = -1;
 
     DragKind drag_ = DragKind::None;
     std::string dragClip_;

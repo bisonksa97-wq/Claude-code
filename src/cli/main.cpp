@@ -165,6 +165,13 @@ Three-point editing (out marks are exclusive; omit an option to clear that mark)
   target <project> [--video <track>|none] [--audio <track>|none]
   edit <project> <media> [--insert] [--at <pos>]         insert/overwrite at the record marks or --at
   duplicate <project> <clip>              copy a clip (with linked partners) right after itself
+  delete <project> <clip...> [--ripple]   remove several clips (and partners) in one step
+
+Tracks
+  track <project> add video|audio [--name N]
+  track <project> remove <track> [--force]      --force also deletes the track's clips
+  track <project> rename <track> <new name>
+  track <project> move <track> <position>       1 = bottom of its kind (V1/A1)
   lift <project> <clip>
   ripple-delete <project> <clip>
 
@@ -197,7 +204,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string command = argv[1];
-    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose"});
+    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose", "force"});
     log::setDefaultLevel(args.flag("verbose") ? log::Level::Debug : log::Level::Warning);
     if (!args.unknown().empty()) return usageError("option " + args.unknown().front() + " needs a value");
     const auto& pos = args.positional();
@@ -418,6 +425,51 @@ int main(int argc, char** argv) {
         if (!r.ok()) return fail(r.error());
         return saveAndReport(*s.value(), std::string(a.flag("insert") ? "Inserted" : "Overwrote") + " frames [" +
                                              std::to_string(r.value().recordIn) + ", " + std::to_string(r.value().recordOut) + ")");
+    }};
+
+    commands["delete"] = {2, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        std::vector<std::string> clips;
+        for (std::size_t i = 1; i < pos.size(); ++i) {
+            auto clip = resolveClip(s.value()->timeline(), pos[i]);
+            if (!clip.ok()) return fail(clip.error());
+            clips.push_back(clip.value());
+        }
+        Status st = a.flag("ripple") ? s.value()->rippleDeleteClips(clips) : s.value()->liftClips(clips);
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), "Deleted " + std::to_string(clips.size()) + " clip(s) and their partners");
+    }};
+
+    commands["track"] = {3, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        const std::string& action = pos[1];
+        if (action == "add") {
+            if (pos[2] != "video" && pos[2] != "audio") return usageError("track add needs video or audio");
+            auto r = session.addTrack(pos[2] == "video" ? TrackKind::Video : TrackKind::Audio, a.option("name").value_or(""));
+            if (!r.ok()) return fail(r.error());
+            return saveAndReport(session, "Added track " + session.timeline().track(r.value())->name);
+        }
+        std::string trackId;
+        for (const auto& t : session.timeline().tracks)
+            if (t.name == pos[2]) trackId = t.id;
+        if (trackId.empty()) return fail(makeError(ErrorCode::NotFound, "cli", "No track named '" + pos[2] + "'."));
+        Status st = Status::success();
+        if (action == "remove") {
+            st = session.removeTrack(trackId, a.flag("force"));
+        } else if (action == "rename") {
+            if (pos.size() < 4) return usageError("track rename needs a new name");
+            st = session.renameTrack(trackId, pos[3]);
+        } else if (action == "move") {
+            if (pos.size() < 4) return usageError("track move needs a position");
+            st = session.moveTrack(trackId, std::atoi(pos[3].c_str()) - 1);
+        } else {
+            return usageError("track actions are add, remove, rename and move");
+        }
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(session, "Track updated");
     }};
 
     commands["duplicate"] = {2, [&](const cli::Args&) {

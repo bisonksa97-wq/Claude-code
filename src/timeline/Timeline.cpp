@@ -56,8 +56,15 @@ Track& Timeline::addTrack(TrackKind kind) {
     Track tr;
     tr.id = generateId();
     tr.kind = kind;
-    const auto count = std::count_if(tracks.begin(), tracks.end(), [&](const Track& t) { return t.kind == kind; });
-    tr.name = std::string(kind == TrackKind::Video ? "V" : "A") + std::to_string(count + 1);
+    // First free "V<n>"/"A<n>" name, so names stay unique after tracks are removed.
+    const std::string prefix = kind == TrackKind::Video ? "V" : "A";
+    for (int n = 1;; ++n) {
+        const std::string candidate = prefix + std::to_string(n);
+        if (std::none_of(tracks.begin(), tracks.end(), [&](const Track& t) { return t.name == candidate; })) {
+            tr.name = candidate;
+            break;
+        }
+    }
     tracks.push_back(std::move(tr));
     return tracks.back();
 }

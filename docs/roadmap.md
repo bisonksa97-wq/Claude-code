@@ -11,11 +11,12 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ☐ Bins/sub-bins UI, ratings, keywords, markers, smart bins
 - ✅ Source monitor with in/out marks and three-point editing (session 4)
 
-## Phase 2: Timeline ◐
+## Phase 2: Timeline ◐ (core editing complete; nesting outstanding)
 - ✅ Tracks, clips, playhead, selection, overwrite/insert/append, razor, lift/ripple delete, trim/ripple/roll/slip/slide/move, linked A/V, snapping
 - ✅ Timeline in/out points and track targeting (session 4)
 - ✅ Timeline and clip markers with navigation (session 5)
-- ☐ Multi-clip selection (marquee, Ctrl-click), markers list panel, add/remove/rename tracks in the UI
+- ✅ Multi-clip selection and group edits; track add/remove/rename/reorder (session 6)
+- ☐ Markers list panel
 - ✅ Copy/cut/paste (overwrite and insert), duplicate (session 5)
 - ☐ Nested timelines / compound clips
 
@@ -37,7 +38,8 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Multi-clip selection and track management (last Phase 2 gaps):**
-1. A selection model (set of clip ids) in the timeline: Ctrl/Shift-click, marquee drag, select-all-forward. Move, delete, copy and duplicate then act on the whole selection through the existing list-based session APIs.
-2. Add, remove, rename and reorder tracks through `EditorSession` (undoable; targets fixed up; a track with clips needs confirmation).
-3. Tests: selection semantics, multi-clip move/delete and their undo, track operations and target repair.
+**Phase 3: transforms, opacity and compositing.** Until now only the top clip is shown and nothing is animatable:
+1. A parameter model for clip properties (position, scale, rotation, anchor, crop, opacity), with keyframes and interpolation (linear, hold, ease). This becomes the shared animation system of §30, stored in the project (format v4 with a migration).
+2. A compositor that blends all enabled video tracks bottom-to-top with straight-alpha "over", applying each clip's transform and opacity. It is CPU-only at first, with golden-image tests.
+3. An inspector panel to edit the properties at the playhead (adds or updates keyframes, undoable).
+4. Tests: interpolation maths, transform and composite pixels on synthetic frames, keyframe persistence, and export of an animated opacity fade.
