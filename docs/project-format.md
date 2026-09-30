@@ -1,11 +1,11 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **2**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **3**, `Project::kFormatVersion`).
 
 ```jsonc
 {
   "format": "ultimatepost.project",
-  "formatVersion": 2,
+  "formatVersion": 3,
   "project": {
     "id": "…", "name": "…", "createdAt": "2026-09-29T17:40:00Z", "modifiedAt": "…",
     "settings": { "frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000 },
@@ -28,12 +28,15 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
       "id": "…", "name": "Timeline 1", "frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000,
       "markIn": 12, "markOut": null,                    // record marks in frames, or null
       "targets": { "video": "<track id>", "audio": "" },  // source patching; "" = stream disabled
+      "markers": [ { "id": "…", "frame": 25, "duration": 0, "name": "Scene 2",
+                     "comment": "", "color": "yellow" } ],  // timeline frames, sorted
       "tracks": [ {
           "id": "…", "kind": "video" | "audio", "name": "V1",
           "enabled": true, "locked": false, "muted": false, "solo": false, "gainDb": 0,
           "clips": [ { "id": "…", "mediaId": "…", "name": "…",
                        "start": 0, "duration": 50, "sourceIn": 0, "sourceLength": 50,
-                       "linkId": "…", "enabled": true, "gainDb": 0 } ]
+                       "linkId": "…", "enabled": true, "gainDb": 0,
+                       "markers": [ … ] } ]                   // clip markers: source frames
       } ]
   } ]
 }
@@ -59,6 +62,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 |---|---|---|
 | 1 | First format | – |
 | 2 | Timeline `markIn`/`markOut` and `targets`; media `markIn`/`markOut` | Targets become the first video and first audio track (how v1 placed media); all marks are null. Covered by `ProjectFormat.MigratesVersion1Documents`. |
+| 3 | Timeline and clip `markers` | Empty marker lists everywhere. Covered by `ProjectFormat.MigratesVersion2Documents` (and v1 files migrate through both steps). |
 
 ## Safety
 

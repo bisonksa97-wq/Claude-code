@@ -13,6 +13,24 @@ enum class TrackKind { Video, Audio };
 
 const char* toString(TrackKind kind);
 
+enum class MarkerColor { Red, Orange, Yellow, Green, Blue, Purple };
+
+const char* toString(MarkerColor color);
+std::optional<MarkerColor> markerColorFromString(const std::string& name);
+
+// A named point (or range, when duration > 0) with a comment.
+// Timeline markers are positioned in timeline frames and do not move with edits.
+// Clip markers are positioned in *source* frames (timeline rate), so they stay on
+// the same picture when the clip is moved, trimmed, slipped or cut.
+struct Marker {
+    std::string id;
+    FrameIndex frame = 0;
+    FrameIndex duration = 0;
+    std::string name;
+    std::string comment;
+    MarkerColor color = MarkerColor::Blue;
+};
+
 // A clip places a range of a media item on a track.
 //
 // All positions are in frames of the owning timeline's frame rate:
@@ -32,8 +50,12 @@ struct Clip {
     std::string linkId;
     bool enabled = true;
     double gainDb = 0.0;  // audio clips only
+    std::vector<Marker> markers;  // source-frame positions
 
     FrameIndex end() const { return start + duration; }
+    // Timeline frame of a source frame of this clip (may fall outside the clip).
+    FrameIndex toTimeline(FrameIndex sourceFrame) const { return start + (sourceFrame - sourceIn); }
+    FrameIndex toSource(FrameIndex timelineFrame) const { return sourceIn + (timelineFrame - start); }
     FrameIndex sourceOut() const { return sourceIn + duration; }
     bool contains(FrameIndex frame) const { return frame >= start && frame < end(); }
     bool bounded() const { return sourceLength > 0; }
@@ -72,6 +94,7 @@ public:
     // three-point edits. Empty = that stream is not edited in.
     std::string videoTarget;
     std::string audioTarget;
+    std::vector<Marker> markers;  // sorted by frame
 
     // Creates a timeline with `videoTracks` video and `audioTracks` audio tracks.
     static Timeline create(std::string name, FrameRate rate, int width, int height, int sampleRate,
@@ -95,6 +118,12 @@ public:
 
     // End of the last clip on any track.
     FrameIndex duration() const;
+
+    // Timeline positions of all markers: timeline markers plus clip markers that fall
+    // inside their clip's visible range. Sorted, without duplicates.
+    std::vector<FrameIndex> markerPositions() const;
+    std::optional<FrameIndex> nextMarker(FrameIndex after) const;
+    std::optional<FrameIndex> previousMarker(FrameIndex before) const;
 
     // Verifies structural invariants (sorted, non-overlapping, positive durations,
     // source ranges in bounds, unique ids, marks ordered, targets of the right kind).

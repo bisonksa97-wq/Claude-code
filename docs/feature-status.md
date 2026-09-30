@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 4._
+_Last updated: session 5._
 
 ## First vertical slice (§90)
 
@@ -30,7 +30,7 @@ _Last updated: session 4._
 | 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
 | 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims, **source monitor with three-point insert/overwrite** (I/O marks, `,` and `.`), source patching. No Cut workspace, no match frame, no J/K/L. |
 | 4 | Multicam | NOT IMPLEMENTED | |
-| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks and track targeting. Missing: markers, adding/removing tracks in the UI, copy/paste. |
+| 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks, track targeting, timeline and clip markers (dialog, navigation) and copy/cut/paste/duplicate. Missing: multi-clip selection, a markers list panel, paste attributes, adding/removing tracks in the UI, nesting. |
 | 6 | Text-based editing | NOT IMPLEMENTED | |
 | 7–15 | Motion graphics, 2D/3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
@@ -45,7 +45,7 @@ _Last updated: session 4._
 | 39–41 | Cloud collaboration, review/approval, version control | NOT IMPLEMENTED | |
 | 42 | Plugin support | NOT IMPLEMENTED | |
 | 43 | Python/Lua/JS automation | NOT IMPLEMENTED | The `EditorSession` service layer is the planned binding surface. |
-| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice, plus `analyze`, `cache-info` and `cache-clear`. No `transcode/proxy/transcribe/archive` yet. |
+| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice, plus three-point editing, markers, duplicate, `analyze`, `cache-info` and `cache-clear`. No `transcode/proxy/transcribe/archive` yet. |
 | 45–46 | GPU / hardware acceleration | NOT IMPLEMENTED | CPU reference pipeline only; FFmpeg decoder frame threading is enabled. |
 | 47 | Proxy workflows | NOT IMPLEMENTED | |
 | 48 | Render caching | PARTIAL | The cache engine (§57) exists and holds the thumbnail and waveform caches. There is no playback, effect or render cache yet. |

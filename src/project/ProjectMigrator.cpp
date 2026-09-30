@@ -33,6 +33,15 @@ const ProjectMigrator& ProjectMigrator::standard() {
             }
             return Status::success();
         });
+        // v2 -> v3: timelines and clips gain marker lists (empty for existing projects).
+        m.addStep(2, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"]) {
+                tl["markers"] = nlohmann::json::array();
+                for (auto& tr : tl["tracks"])
+                    for (auto& clip : tr["clips"]) clip["markers"] = nlohmann::json::array();
+            }
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

@@ -1,6 +1,7 @@
 #include "timeline/Timeline.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 
 #include "core/Id.h"
@@ -9,6 +10,18 @@ namespace up {
 
 const char* toString(TrackKind kind) {
     return kind == TrackKind::Video ? "video" : "audio";
+}
+
+namespace {
+constexpr std::array<const char*, 6> kMarkerColorNames{"red", "orange", "yellow", "green", "blue", "purple"};
+}  // namespace
+
+const char* toString(MarkerColor color) { return kMarkerColorNames[static_cast<std::size_t>(color)]; }
+
+std::optional<MarkerColor> markerColorFromString(const std::string& name) {
+    for (std::size_t i = 0; i < kMarkerColorNames.size(); ++i)
+        if (name == kMarkerColorNames[i]) return static_cast<MarkerColor>(i);
+    return std::nullopt;
 }
 
 const Clip* Track::clipAt(FrameIndex frame) const {
@@ -111,6 +124,33 @@ FrameIndex Timeline::duration() const {
     return d;
 }
 
+std::vector<FrameIndex> Timeline::markerPositions() const {
+    std::vector<FrameIndex> out;
+    for (const auto& m : markers) out.push_back(m.frame);
+    for (const auto& t : tracks)
+        for (const auto& c : t.clips)
+            for (const auto& m : c.markers) {
+                const FrameIndex f = c.toTimeline(m.frame);
+                if (c.contains(f)) out.push_back(f);
+            }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::optional<FrameIndex> Timeline::nextMarker(FrameIndex after) const {
+    for (FrameIndex f : markerPositions())
+        if (f > after) return f;
+    return std::nullopt;
+}
+
+std::optional<FrameIndex> Timeline::previousMarker(FrameIndex before) const {
+    const auto positions = markerPositions();
+    for (auto it = positions.rbegin(); it != positions.rend(); ++it)
+        if (*it < before) return *it;
+    return std::nullopt;
+}
+
 Status Timeline::validate() const {
     auto fail = [](const std::string& msg) {
         return makeError(ErrorCode::Internal, "timeline", "The timeline structure is inconsistent: " + msg,
@@ -126,6 +166,14 @@ Status Timeline::validate() const {
     if (!checkTarget(videoTarget, TrackKind::Video) || !checkTarget(audioTarget, TrackKind::Audio))
         return fail("a source target refers to a missing track or one of the wrong kind");
     std::set<std::string> ids;
+    auto checkMarkers = [&](const std::vector<Marker>& list, bool sorted) -> bool {
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            if (!ids.insert(list[i].id).second || list[i].duration < 0 || (sorted && list[i].frame < 0)) return false;
+            if (sorted && i > 0 && list[i - 1].frame > list[i].frame) return false;
+        }
+        return true;
+    };
+    if (!checkMarkers(markers, true)) return fail("invalid or unsorted timeline markers");
     for (const auto& t : tracks) {
         if (!ids.insert(t.id).second) return fail("duplicate track id " + t.id);
         for (std::size_t i = 0; i < t.clips.size(); ++i) {
@@ -136,6 +184,7 @@ Status Timeline::validate() const {
             if (c.sourceIn < 0) return fail("clip " + c.id + " has negative source in");
             if (c.bounded() && c.sourceOut() > c.sourceLength) return fail("clip " + c.id + " exceeds its media");
             if (i > 0 && t.clips[i - 1].end() > c.start) return fail("clips overlap on track " + t.name);
+            if (!checkMarkers(c.markers, false)) return fail("invalid markers on clip " + c.id);
         }
     }
     return Status::success();

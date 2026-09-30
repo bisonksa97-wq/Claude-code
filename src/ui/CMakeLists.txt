@@ -2,6 +2,7 @@ set(CMAKE_AUTOMOC ON)
 
 add_library(up_ui STATIC
     MainWindow.cpp
+    MarkerDialog.cpp
     MediaPoolPanel.cpp
     Theme.cpp
     TimelineView.cpp

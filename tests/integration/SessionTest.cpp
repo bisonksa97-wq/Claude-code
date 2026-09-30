@@ -263,3 +263,108 @@ TEST_F(SessionTest, MarksPersistAndUndo) {
     EXPECT_EQ(reopened.value()->mediaMarks(a).first, 3);
 }
 
+TEST_F(SessionTest, MarkersAddEditNavigateAndUndo) {
+    ASSERT_TRUE(session->appendMedia(a).ok());
+    auto m1 = session->addMarker(30, "Act 2", MarkerColor::Green);
+    ASSERT_TRUE(m1.ok());
+    auto m2 = session->addMarker(10);
+    ASSERT_TRUE(m2.ok());
+    const std::string clip = track(0).clips[0].id;
+    auto cm = session->addClipMarker(clip, 20, "Beat");
+    ASSERT_TRUE(cm.ok());
+    EXPECT_FALSE(session->addClipMarker(clip, 70).ok());  // outside the clip
+
+    const auto all = session->markers();
+    ASSERT_EQ(all.size(), 3u);
+    EXPECT_EQ(all[0].timelineFrame, 10);
+    EXPECT_EQ(all[1].clipId, clip);
+    EXPECT_EQ(all[2].marker.name, "Act 2");
+    EXPECT_EQ(session->timeline().nextMarker(10), 20);
+
+    Marker edited = session->findMarker(m1.value())->marker;
+    edited.name = "Act II";
+    edited.frame = 5;  // timeline markers can be moved
+    ASSERT_TRUE(session->updateMarker(edited).ok());
+    EXPECT_EQ(session->timeline().markers.front().name, "Act II");  // re-sorted to the front
+    ASSERT_TRUE(session->removeMarker(cm.value()).ok());
+    EXPECT_EQ(session->markers().size(), 2u);
+    session->undo();
+    EXPECT_EQ(session->markers().size(), 3u);
+    EXPECT_FALSE(session->removeMarker("nope").ok());
+}
+
+TEST_F(SessionTest, CopyPasteKeepsLinksAndUsesTargets) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // a on V1/A1 [0,50)
+    ASSERT_TRUE(session->addClipMarker(track(0).clips[0].id, 5, "m").ok());
+    ASSERT_TRUE(session->copyClips({track(0).clips[0].id}).ok());
+    EXPECT_EQ(session->clipboard().items.size(), 2u);  // linked audio came along
+    EXPECT_EQ(session->clipboard().span, 50);
+
+    // Paste on V2 (retargeted) + A1 at frame 60.
+    ASSERT_TRUE(session->setTrackTargets(track(1).id, track(2).id).ok());
+    auto pasted = session->paste(60, ops::EditMode::Overwrite);
+    ASSERT_TRUE(pasted.ok()) << pasted.error().toString();
+    ASSERT_EQ(pasted.value().size(), 2u);
+    const Timeline& tl = session->timeline();
+    const Clip* v = tl.clip(pasted.value()[0]);
+    const Clip* au = tl.clip(pasted.value()[1]);
+    EXPECT_EQ(tl.trackOfClip(v->id)->id, track(1).id);
+    EXPECT_EQ(v->start, 60);
+    EXPECT_EQ(v->linkId, au->linkId);
+    EXPECT_NE(v->linkId, track(0).clips[0].linkId);  // a new link group
+    EXPECT_NE(v->markers.at(0).id, track(0).clips[0].markers.at(0).id);
+    EXPECT_TRUE(tl.validate().ok());
+
+    // Pasting with the audio target disabled places only the video, unlinked.
+    ASSERT_TRUE(session->setTrackTargets(track(1).id, "").ok());
+    auto videoOnly = session->paste(120, ops::EditMode::Overwrite);
+    ASSERT_TRUE(videoOnly.ok());
+    ASSERT_EQ(videoOnly.value().size(), 1u);
+    EXPECT_TRUE(tl.clip(videoOnly.value()[0])->linkId.empty());
+
+    // Paste insert ripples every unlocked track; undo restores it in one step.
+    ASSERT_TRUE(session->setTrackTargets(track(0).id, track(2).id).ok());
+    ASSERT_TRUE(session->paste(0, ops::EditMode::Insert).ok());
+    EXPECT_EQ(track(0).clips[1].start, 50);
+    EXPECT_EQ(track(1).clips[0].start, 110);
+    session->undo();
+    EXPECT_EQ(track(0).clips[0].start, 0);
+    EXPECT_EQ(track(1).clips[0].start, 60);
+}
+
+TEST_F(SessionTest, CutAndDuplicate) {
+    ASSERT_TRUE(session->appendMedia(a).ok());
+    ASSERT_TRUE(session->appendMedia(b).ok());  // b [50,90)
+    const std::string bClip = track(0).clips[1].id;
+    auto dup = session->duplicateClips({bClip});
+    ASSERT_TRUE(dup.ok()) << dup.error().toString();
+    ASSERT_EQ(dup.value().size(), 2u);
+    EXPECT_EQ(session->timeline().clip(dup.value()[0])->start, 90);  // right after the original
+    EXPECT_EQ(session->timeline().duration(), 130);
+    EXPECT_TRUE(session->clipboard().empty());  // duplicate leaves the clipboard alone
+
+    ASSERT_TRUE(session->cutClips({track(0).clips[0].id}).ok());
+    EXPECT_EQ(track(0).clips.size(), 2u);  // a lifted (gap left)
+    EXPECT_EQ(track(2).clips.size(), 2u);
+    EXPECT_EQ(session->clipboard().items.size(), 2u);
+    session->undo();  // one step restores both
+    EXPECT_EQ(track(0).clips.size(), 3u);
+    EXPECT_EQ(track(2).clips.size(), 3u);
+}
+
+TEST_F(SessionTest, PasteRejectsImpossibleDestinations) {
+    EXPECT_FALSE(session->paste(0, ops::EditMode::Overwrite).ok());  // empty clipboard
+    ASSERT_TRUE(session->appendMedia(a).ok());
+    const std::string v1Clip = track(0).clips[0].id;
+    ASSERT_TRUE(session->moveClip(v1Clip, track(1).id, 0).ok());  // now on V2 (+A1)
+    ASSERT_TRUE(session->placeMedia(b, 0, ops::EditMode::Overwrite, track(0).id, track(3).id).ok());  // V1 + A2
+    // Copy clips spanning V1..V2: pasting with V2 targeted needs a V3.
+    ASSERT_TRUE(session->copyClips({track(0).clips[0].id, track(1).clips[0].id}).ok());
+    ASSERT_TRUE(session->setTrackTargets(track(1).id, track(2).id).ok());
+    auto r = session->paste(100, ops::EditMode::Overwrite);
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, ErrorCode::OutOfRange);
+    ASSERT_TRUE(session->setTrackTargets("", "").ok());
+    EXPECT_FALSE(session->paste(100, ops::EditMode::Overwrite).ok());
+}
+

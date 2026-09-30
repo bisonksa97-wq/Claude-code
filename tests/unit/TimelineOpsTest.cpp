@@ -210,6 +210,43 @@ TEST_F(TimelineOps, DurationIsLastClipEnd) {
     EXPECT_EQ(tl.duration(), 45);
 }
 
+TEST_F(TimelineOps, ClipMarkersFollowTheSourceAndSplitOnRazor) {
+    Clip c = makeClip(10, 40, 100);
+    c.markers.push_back(Marker{"m1", 105, 0, "a", "", MarkerColor::Red});  // timeline 15
+    c.markers.push_back(Marker{"m2", 130, 0, "b", "", MarkerColor::Red});  // timeline 40
+    c.markers.push_back(Marker{"m3", 500, 0, "hidden", "", MarkerColor::Red});
+    auto id = placeClip(tl, v1, c, EditMode::Overwrite);
+    ASSERT_TRUE(id.ok());
+    tl.markers.push_back(Marker{"t1", 3, 0, "tl", "", MarkerColor::Blue});
+    EXPECT_EQ(tl.markerPositions(), (std::vector<FrameIndex>{3, 15, 40}));  // m3 is outside the clip
+    // Moving the clip moves its markers; timeline markers stay put.
+    ASSERT_TRUE(moveClip(tl, id.value(), v1, 20).ok());
+    EXPECT_EQ(tl.markerPositions(), (std::vector<FrameIndex>{3, 25, 50}));
+    // Slipping changes which picture the marker is on, so the marker moves in the timeline.
+    ASSERT_TRUE(slip(tl, id.value(), 5).ok());
+    EXPECT_EQ(tl.markerPositions(), (std::vector<FrameIndex>{3, 20, 45}));
+    // Razor gives each piece the markers on its side, with unique ids (validate passes).
+    auto right = razor(tl, id.value(), 30);
+    ASSERT_TRUE(right.ok());
+    EXPECT_EQ(tl.clip(id.value())->markers.size(), 1u);
+    EXPECT_EQ(tl.clip(right.value())->markers.size(), 2u);
+    EXPECT_EQ(tl.markerPositions(), (std::vector<FrameIndex>{3, 20, 45}));
+    EXPECT_EQ(tl.nextMarker(20), 45);
+    EXPECT_EQ(tl.previousMarker(20), 3);
+    EXPECT_FALSE(tl.nextMarker(45).has_value());
+}
+
+TEST_F(TimelineOps, ValidateRejectsBadMarkers) {
+    tl.markers.push_back(Marker{"a", 10, 0, "", "", MarkerColor::Blue});
+    tl.markers.push_back(Marker{"b", 5, 0, "", "", MarkerColor::Blue});  // unsorted
+    EXPECT_FALSE(tl.validate().ok());
+    tl.markers.pop_back();
+    tl.markers.push_back(Marker{"a", 20, 0, "", "", MarkerColor::Blue});  // duplicate id
+    EXPECT_FALSE(tl.validate().ok());
+    EXPECT_EQ(markerColorFromString("purple"), MarkerColor::Purple);
+    EXPECT_FALSE(markerColorFromString("mauve").has_value());
+}
+
 // Randomised stress test: any sequence of operations must keep the timeline valid,
 // and a failed operation must leave it exactly unchanged.
 TEST_F(TimelineOps, RandomOperationsPreserveInvariants) {

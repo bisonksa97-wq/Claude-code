@@ -64,11 +64,34 @@ MediaInfo mediaInfoFromJson(const json& j) {
     return i;
 }
 
+json toJson(const std::vector<Marker>& markers) {
+    json out = json::array();
+    for (const auto& m : markers)
+        out.push_back(json{{"id", m.id},     {"frame", m.frame},     {"duration", m.duration},
+                           {"name", m.name}, {"comment", m.comment}, {"color", toString(m.color)}});
+    return out;
+}
+
+std::vector<Marker> markersFromJson(const json& j) {
+    std::vector<Marker> out;
+    for (const auto& mj : j) {
+        Marker m;
+        m.id = mj.at("id").get<std::string>();
+        m.frame = mj.at("frame").get<FrameIndex>();
+        m.duration = mj.value("duration", FrameIndex{0});
+        m.name = mj.value("name", "");
+        m.comment = mj.value("comment", "");
+        m.color = markerColorFromString(mj.value("color", "blue")).value_or(MarkerColor::Blue);
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
 json toJson(const Clip& c) {
     return json{{"id", c.id},         {"mediaId", c.mediaId},   {"name", c.name},
                 {"start", c.start},   {"duration", c.duration}, {"sourceIn", c.sourceIn},
                 {"sourceLength", c.sourceLength}, {"linkId", c.linkId}, {"enabled", c.enabled},
-                {"gainDb", c.gainDb}};
+                {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}};
 }
 
 Clip clipFromJson(const json& j) {
@@ -83,6 +106,7 @@ Clip clipFromJson(const json& j) {
     c.linkId = j.value("linkId", "");
     c.enabled = j.value("enabled", true);
     c.gainDb = j.value("gainDb", 0.0);
+    c.markers = markersFromJson(j.value("markers", json::array()));
     return c;
 }
 
@@ -120,6 +144,7 @@ json toJson(const Timeline& t) {
                 {"markIn", optionalToJson(t.markIn)},
                 {"markOut", optionalToJson(t.markOut)},
                 {"targets", {{"video", t.videoTarget}, {"audio", t.audioTarget}}},
+                {"markers", toJson(t.markers)},
                 {"tracks", tracks}};
 }
 
@@ -137,6 +162,7 @@ Timeline timelineFromJson(const json& j) {
     const json targets = j.value("targets", json::object());
     t.videoTarget = targets.value("video", "");
     t.audioTarget = targets.value("audio", "");
+    t.markers = markersFromJson(j.value("markers", json::array()));
     return t;
 }
 

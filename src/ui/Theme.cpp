@@ -4,6 +4,7 @@
 #include <QFontMetrics>
 #include <QPalette>
 #include <QWidget>
+#include <algorithm>
 
 namespace up::ui {
 namespace {
@@ -38,6 +39,13 @@ DesignTokens tokensFor(ThemeKind kind) {
 }
 
 const DesignTokens& currentTokens() { return g_tokens; }
+
+QColor markerColor(int index) {
+    // red, orange, yellow, green, blue, purple (matches up::MarkerColor)
+    static const QColor colors[] = {QColor("#e5484d"), QColor("#f76b15"), QColor("#ffc53d"),
+                                    QColor("#30a46c"), QColor("#3e8ef7"), QColor("#8e4ec6")};
+    return colors[std::clamp(index, 0, 5)];
+}
 ThemeKind currentThemeKind() { return g_kind; }
 
 Metrics metricsFor(const QWidget* widget) {

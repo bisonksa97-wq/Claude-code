@@ -1,6 +1,8 @@
 #include "ui/TimelineView.h"
 
 #include <QDragEnterEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -372,6 +374,37 @@ void TimelineView::dropEvent(QDropEvent* event) {
     update();
 }
 
+std::string TimelineView::markerAt(const QPoint& pos) const {
+    if (!session_ || pos.y() >= metricsFor(this).rulerHeight) return {};
+    std::string best;
+    int bestDistance = metricsFor(this).snapDistance + 1;
+    for (const auto& ref : session_->markers()) {
+        // Flags extend to the right of their frame, ticks are centred on it.
+        const int x = xForFrame(ref.timelineFrame);
+        const int d = ref.clipId.empty() && pos.x() >= x && pos.x() <= x + 8 ? 0 : std::abs(pos.x() - x);
+        if (d < bestDistance) {
+            best = ref.marker.id;
+            bestDistance = d;
+        }
+    }
+    return best;
+}
+
+void TimelineView::mouseDoubleClickEvent(QMouseEvent* event) {
+    const std::string id = markerAt(event->pos());
+    if (!id.empty()) emit markerEditRequested(QString::fromStdString(id));
+}
+
+void TimelineView::contextMenuEvent(QContextMenuEvent* event) {
+    const std::string id = markerAt(event->pos());
+    if (id.empty()) return;
+    QMenu menu(this);
+    const QString qid = QString::fromStdString(id);
+    menu.addAction(tr("Edit Marker…"), this, [this, qid] { emit markerEditRequested(qid); });
+    menu.addAction(tr("Delete Marker"), this, [this, qid] { emit markerDeleteRequested(qid); });
+    menu.exec(event->globalPos());
+}
+
 void TimelineView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     emit viewChanged();
@@ -446,6 +479,13 @@ void TimelineView::drawClip(QPainter& p, const Clip& clip, const QRect& r, bool 
         if (!media || !media->online) label = tr("OFFLINE — %1").arg(label);
         const QRect textRect(labelLeft, r.top() + 3, r.right() - labelLeft - 3, r.height() - 6);
         p.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, p.fontMetrics().elidedText(label, Qt::ElideRight, textRect.width()));
+    }
+    // Clip markers: a coloured tick at the top of the clip where each marked picture is.
+    for (const auto& marker : clip.markers) {
+        const FrameIndex f = clip.toTimeline(marker.frame);
+        if (!clip.contains(f)) continue;
+        const int x = xForFrame(f);
+        p.fillRect(QRect(x - 1, r.top() + 1, 3, r.height() / 3), markerColor(static_cast<int>(marker.color)));
     }
 }
 
@@ -560,6 +600,32 @@ void TimelineView::paintEvent(QPaintEvent*) {
         p.setPen(QPen(t.accent, 2));
         p.drawLine(x, m.rulerHeight, x, height());
     }
+
+    // Markers on the ruler (timeline markers as flags, clip markers as small ticks).
+    p.setClipRect(QRect(m.trackHeaderWidth, 0, width() - m.trackHeaderWidth, m.rulerHeight));
+    for (const auto& ref : session_->markers()) {
+        const int x = xForFrame(ref.timelineFrame);
+        const QColor color = markerColor(static_cast<int>(ref.marker.color));
+        if (ref.clipId.empty()) {
+            if (ref.marker.duration > 0) {
+                QColor span = color;
+                span.setAlpha(110);
+                p.fillRect(QRect(x, 2, xForFrame(ref.timelineFrame + ref.marker.duration) - x, m.rulerHeight / 2 - 2), span);
+            }
+            const QPolygon flag({QPoint(x, 2), QPoint(x + 8, 2), QPoint(x + 8, m.rulerHeight / 2), QPoint(x, m.rulerHeight / 2 + 4)});
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawPolygon(flag);
+            p.setBrush(Qt::NoBrush);
+            if (!ref.marker.name.empty()) {
+                p.setPen(t.text);
+                p.drawText(x + 11, m.rulerHeight / 2, QString::fromStdString(ref.marker.name));
+            }
+        } else {
+            p.fillRect(QRect(x - 1, 2, 3, m.rulerHeight / 3), color);
+        }
+    }
+    p.setClipping(false);
 
     // Playhead.
     const int px = xForFrame(playhead_);

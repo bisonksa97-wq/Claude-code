@@ -68,6 +68,9 @@ signals:
     void viewChanged();
     void errorOccurred(const QString& message);
     void statusMessage(const QString& message);
+    // A marker was double-clicked (edit) or picked from its context menu.
+    void markerEditRequested(const QString& markerId);
+    void markerDeleteRequested(const QString& markerId);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -80,6 +83,8 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
 
 private:
     enum class DragKind { None, Scrub, Move, TrimIn, TrimOut };
@@ -100,6 +105,8 @@ private:
     QRect toggleRect(int row, int index) const;
     // Source-patch box at the left of a track header (filled = this track receives the source).
     QRect targetRect(int row) const;
+    // Id of the timeline or clip marker drawn under `pos` in the ruler, if any.
+    std::string markerAt(const QPoint& pos) const;
 
     EditorSession* session_ = nullptr;
     MediaAssets* assets_ = nullptr;

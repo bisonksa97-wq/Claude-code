@@ -288,6 +288,75 @@ TEST(Ui, SourceMonitorThreePointEdit) {
     }
 }
 
+TEST(Ui, ClipboardAndMarkersThroughMenus) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 50));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1280, 800);
+    auto session = EditorSession::createNew("Clip", SequenceSettings{FrameRate{25, 1}, 320, 240, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    ui::TimelineView* tv = window.timeline();
+
+    // Copy the selected clip (its linked audio comes along) and paste at the playhead.
+    tv->selectClip(QString::fromStdString(tl.tracks[0].clips[0].id));
+    findAction(&window, "Copy")->trigger();
+    EXPECT_EQ(window.session()->clipboard().items.size(), 2u);
+    window.viewer()->setPosition(60);
+    findAction(&window, "Paste")->trigger();
+    ASSERT_EQ(tl.tracks[0].clips.size(), 2u);
+    EXPECT_EQ(tl.tracks[0].clips[1].start, 60);
+    EXPECT_EQ(tl.tracks[2].clips[1].start, 60);
+    EXPECT_EQ(window.viewer()->position(), 110);  // playhead continues after the pasted clips
+
+    // Duplicate the pasted clip: it lands right after itself.
+    findAction(&window, "Duplicate")->trigger();
+    ASSERT_EQ(tl.tracks[0].clips.size(), 3u);
+    EXPECT_EQ(tl.tracks[0].clips[2].start, 110);
+
+    // Markers: add at two positions and a clip marker, then navigate with the menu actions.
+    window.viewer()->setPosition(20);
+    findAction(&window, "Add Marker")->trigger();
+    window.viewer()->setPosition(80);
+    findAction(&window, "Add Marker")->trigger();
+    tv->selectClip(QString::fromStdString(tl.tracks[0].clips[0].id));
+    window.viewer()->setPosition(30);
+    findAction(&window, "Add Clip Marker")->trigger();
+    EXPECT_EQ(window.session()->markers().size(), 3u);
+    window.viewer()->setPosition(0);
+    findAction(&window, "Go to Next Marker")->trigger();
+    EXPECT_EQ(window.viewer()->position(), 20);
+    findAction(&window, "Go to Next Marker")->trigger();
+    EXPECT_EQ(window.viewer()->position(), 30);
+    findAction(&window, "Go to Previous Marker")->trigger();
+    EXPECT_EQ(window.viewer()->position(), 20);
+
+    // Cut removes the selection (and its partner) as one undo step.
+    tv->selectClip(QString::fromStdString(tl.tracks[0].clips[0].id));
+    findAction(&window, "Cut")->trigger();
+    EXPECT_EQ(tl.tracks[0].clips.size(), 2u);
+    EXPECT_EQ(tl.tracks[2].clips.size(), 2u);
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_MARKERS")) {
+        window.session()->undo();
+        ASSERT_TRUE(window.session()->updateMarker([&] {
+            Marker m = window.session()->markers().front().marker;
+            m.name = "Intro";
+            m.color = MarkerColor::Yellow;
+            m.duration = 15;
+            return m;
+        }()).ok());
+        tv->zoomToFit();
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+}
+
 TEST(Ui, ThemesUseCentralTokens) {
     for (auto kind : {ui::ThemeKind::Dark, ui::ThemeKind::Light, ui::ThemeKind::HighContrast}) {
         ui::applyTheme(*qApp, kind);

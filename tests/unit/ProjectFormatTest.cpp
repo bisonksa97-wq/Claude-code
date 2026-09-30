@@ -155,6 +155,47 @@ TEST(ProjectFormat, MigratesVersion1Documents) {
     EXPECT_EQ(nlohmann::json::parse(ProjectSerializer::toJson(p.value()))["formatVersion"], Project::kFormatVersion);
 }
 
+TEST(ProjectFormat, RoundTripsMarkers) {
+    Project p = sampleProject();
+    p.timelines[0].markers.push_back(Marker{"tm", 12, 5, "Scene 2", "check sync", MarkerColor::Yellow});
+    p.timelines[0].tracks[0].clips[0].markers.push_back(Marker{"cm", 30, 0, "Beat", "", MarkerColor::Red});
+    auto q = ProjectSerializer::fromJson(ProjectSerializer::toJson(p));
+    ASSERT_TRUE(q.ok()) << q.error().toString();
+    const Marker& tm = q.value().timelines[0].markers.at(0);
+    EXPECT_EQ(tm.frame, 12);
+    EXPECT_EQ(tm.duration, 5);
+    EXPECT_EQ(tm.name, "Scene 2");
+    EXPECT_EQ(tm.comment, "check sync");
+    EXPECT_EQ(tm.color, MarkerColor::Yellow);
+    EXPECT_EQ(q.value().timelines[0].tracks[0].clips[0].markers.at(0).name, "Beat");
+}
+
+// A document exactly as format version 2 wrote it (no markers anywhere).
+TEST(ProjectFormat, MigratesVersion2Documents) {
+    const char* v2 = R"({
+      "format": "ultimatepost.project", "formatVersion": 2,
+      "project": {"id": "p2", "name": "V2", "createdAt": "", "modifiedAt": "",
+                  "settings": {"frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000},
+                  "activeTimelineId": "t1"},
+      "bins": [],
+      "media": [{"id": "m1", "name": "a.mov", "path": "/a.mov", "relativePath": "", "binId": "",
+                 "info": {"hasVideo": true, "frameRate": "25/1", "durationSeconds": 4.0},
+                 "rating": 0, "keywords": [], "comment": "", "importedAt": "", "markIn": 1.0, "markOut": null}],
+      "timelines": [{"id": "t1", "name": "Timeline 1", "frameRate": "25/1", "width": 1920, "height": 1080,
+                     "sampleRate": 48000, "markIn": 5, "markOut": null,
+                     "targets": {"video": "v1", "audio": ""},
+                     "tracks": [{"id": "v1", "kind": "video", "name": "V1", "clips": [
+                        {"id": "c1", "mediaId": "m1", "name": "a", "start": 0, "duration": 50, "sourceIn": 0,
+                         "sourceLength": 100, "linkId": "", "enabled": true, "gainDb": 0}]}]}]
+    })";
+    auto p = ProjectSerializer::fromJson(v2);
+    ASSERT_TRUE(p.ok()) << p.error().toString();
+    EXPECT_TRUE(p.value().timelines[0].markers.empty());
+    EXPECT_TRUE(p.value().timelines[0].tracks[0].clips[0].markers.empty());
+    EXPECT_EQ(p.value().timelines[0].markIn, 5);  // v2 data is preserved
+    EXPECT_EQ(p.value().media[0].markIn, 1.0);
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

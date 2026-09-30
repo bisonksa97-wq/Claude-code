@@ -43,6 +43,9 @@ struct Metrics {
 
 enum class ThemeKind { Dark, Light, HighContrast };
 
+// User-chosen marker colours (the same in every theme so they keep their meaning).
+QColor markerColor(int markerColorIndex);
+
 DesignTokens tokensFor(ThemeKind kind);
 const DesignTokens& currentTokens();
 Metrics metricsFor(const QWidget* widget);

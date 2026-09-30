@@ -33,6 +33,19 @@ Every operation is **all-or-nothing**: it runs on a copy, validates, and commits
 | `moveClip` | Moves to a position/track of the same kind with overwrite semantics |
 | `insertGap`, `clearRange` | Building blocks for sync-locked edits |
 
+## Markers
+
+- **Timeline markers** sit at a timeline frame and do not move when clips are edited (as in most NLEs). They can span a range (`duration`) and carry a name, comment and colour.
+- **Clip markers** are stored in the clip's *source* frames, so they stay on the same picture when the clip is moved, trimmed or cut, and move along the timeline when the clip is slipped. A marker is only shown and navigable while its frame lies inside the clip. Razor and split give each piece the markers on its side.
+- `Timeline::markerPositions/nextMarker/previousMarker` drive navigation. All marker edits go through `EditorSession` (`addMarker`, `addClipMarker`, `updateMarker`, `removeMarker`) and are undoable.
+
+## Clipboard
+
+`EditorSession` keeps a clipboard of clips (linked partners are always included), positioned relative to the earliest copied clip. Copying does not change the project.
+- **Paste** lands each kind's lowest copied track on that kind's **target** track, and the others keep their offsets. A disabled target skips that kind; a pasted clip whose partner was skipped is unlinked. Overwrite, or insert with a sync-locked gap on every unlocked track. Pasted clips get new ids, new link groups and new marker ids.
+- **Cut** = copy + lift, one undo step.
+- **Duplicate** places a copy on the original tracks directly after the selection (overwrite) and leaves the clipboard untouched.
+
 ## Three-point editing (`timeline/ThreePointEdit.h`)
 
 `resolveThreePointEdit` is a pure function of the source marks, record (timeline) marks, playhead and source length:

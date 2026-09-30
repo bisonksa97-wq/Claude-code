@@ -154,11 +154,17 @@ Editing (positions/deltas accept frames or HH:MM:SS:FF; clips accept ids or TRAC
   slide <project> <clip> <delta>
   move <project> <clip> <track name> <pos>
 
+Markers (colours: red orange yellow green blue purple)
+  marker <project> add <pos> [--name N] [--color C] [--comment T] [--length <frames>] [--clip <clip>]
+  marker <project> list
+  marker <project> remove <marker id>
+
 Three-point editing (out marks are exclusive; omit an option to clear that mark)
   mark <project> <media> [--in <pos>] [--out <pos>]      source marks
   mark-timeline <project> [--in <pos>] [--out <pos>]     record marks
   target <project> [--video <track>|none] [--audio <track>|none]
   edit <project> <media> [--insert] [--at <pos>]         insert/overwrite at the record marks or --at
+  duplicate <project> <clip>              copy a clip (with linked partners) right after itself
   lift <project> <clip>
   ripple-delete <project> <clip>
 
@@ -412,6 +418,63 @@ int main(int argc, char** argv) {
         if (!r.ok()) return fail(r.error());
         return saveAndReport(*s.value(), std::string(a.flag("insert") ? "Inserted" : "Overwrote") + " frames [" +
                                              std::to_string(r.value().recordIn) + ", " + std::to_string(r.value().recordOut) + ")");
+    }};
+
+    commands["duplicate"] = {2, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        auto clip = resolveClip(s.value()->timeline(), pos[1]);
+        if (!clip.ok()) return fail(clip.error());
+        auto r = s.value()->duplicateClips({clip.value()});
+        if (!r.ok()) return fail(r.error());
+        return saveAndReport(*s.value(), "Duplicated " + std::to_string(r.value().size()) + " clip(s)");
+    }};
+
+    commands["marker"] = {2, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        const FrameRate rate = session.timeline().frameRate;
+        const std::string& action = pos[1];
+        if (action == "list") {
+            for (const auto& ref : session.markers()) {
+                std::cout << ref.marker.id.substr(0, 8) << "  " << formatTimecode(ref.timelineFrame, rate) << "  "
+                          << toString(ref.marker.color) << "  " << (ref.clipId.empty() ? "timeline" : "clip " + ref.clipId.substr(0, 8))
+                          << "  " << ref.marker.name;
+                if (ref.marker.duration > 0) std::cout << "  (" << ref.marker.duration << " frames)";
+                if (!ref.marker.comment.empty()) std::cout << "  - " << ref.marker.comment;
+                std::cout << "\n";
+            }
+            return 0;
+        }
+        if (pos.size() < 3) return usageError("marker " + action + " needs another argument");
+        if (action == "remove") {
+            std::string id = pos[2];
+            for (const auto& ref : session.markers())
+                if (ref.marker.id.rfind(pos[2], 0) == 0) id = ref.marker.id;
+            Status st = session.removeMarker(id);
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Removed marker");
+        }
+        if (action != "add") return usageError("marker actions are add, list and remove");
+        const auto at = parseFrame(pos[2], rate);
+        if (!at) return usageError("invalid position " + pos[2]);
+        const auto color = markerColorFromString(a.option("color").value_or("blue"));
+        if (!color) return usageError("unknown colour");
+        const std::string name = a.option("name").value_or("");
+        const std::string comment = a.option("comment").value_or("");
+        Result<std::string> id = std::string();
+        if (auto clipRef = a.option("clip")) {
+            auto clip = resolveClip(session.timeline(), *clipRef);
+            if (!clip.ok()) return fail(clip.error());
+            id = session.addClipMarker(clip.value(), *at, name, *color, comment);
+        } else {
+            const auto length = parseFrame(a.option("length").value_or("0"), rate);
+            if (!length) return usageError("invalid --length");
+            id = session.addMarker(*at, name, *color, comment, *length);
+        }
+        if (!id.ok()) return fail(id.error());
+        return saveAndReport(session, "Added marker " + id.value().substr(0, 8));
     }};
 
     commands["export"] = {2, [&](const cli::Args& a) {

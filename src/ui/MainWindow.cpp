@@ -24,6 +24,7 @@
 #include "app/SourceProject.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
+#include "ui/MarkerDialog.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
@@ -83,6 +84,10 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     }
     connect(tv, &TimelineView::playheadMoved, this, [this] { setActiveViewer(viewer_); });
     connect(tv, &TimelineView::selectionChanged, this, [this] { setActiveViewer(viewer_); });
+    connect(tv, &TimelineView::markerEditRequested, this, &MainWindow::editMarker);
+    connect(tv, &TimelineView::markerDeleteRequested, this, [this](const QString& id) {
+        runEdit([&] { return session_->removeMarker(id.toStdString()); });
+    });
     connect(mediaPool_, &MediaPoolPanel::mediaActivated, this, [this](const QString& id) { loadSource(id); });
     setActiveViewer(viewer_);
     connect(mediaPool_, &MediaPoolPanel::importRequested, this, &MainWindow::importMedia);
@@ -197,6 +202,12 @@ void MainWindow::buildMenus() {
     edit->addAction(undoAction_);
     edit->addAction(redoAction_);
     edit->addSeparator();
+    add(edit, tr("Cut"), QKeySequence::Cut, [this] { copySelection(true); });
+    add(edit, tr("Copy"), QKeySequence::Copy, [this] { copySelection(false); });
+    add(edit, tr("Paste"), QKeySequence::Paste, [this] { pasteClipboard(ops::EditMode::Overwrite); });
+    add(edit, tr("Paste Insert"), QKeySequence("Ctrl+Shift+V"), [this] { pasteClipboard(ops::EditMode::Insert); });
+    add(edit, tr("Duplicate"), QKeySequence("Ctrl+D"), &MainWindow::duplicateSelection);
+    edit->addSeparator();
     add(edit, tr("Razor at Playhead"), QKeySequence("Ctrl+K"), &MainWindow::razor);
     add(edit, tr("Lift (Delete Leaving Gap)"), QKeySequence(Qt::Key_Delete), [this] { deleteSelected(false); });
     add(edit, tr("Ripple Delete"), QKeySequence("Shift+Del"), [this] { deleteSelected(true); });
@@ -227,6 +238,12 @@ void MainWindow::buildMenus() {
     edit->addSeparator();
     add(edit, tr("Insert Edit"), QKeySequence(Qt::Key_Comma), [this] { threePointEdit(ops::EditMode::Insert); });
     add(edit, tr("Overwrite Edit"), QKeySequence(Qt::Key_Period), [this] { threePointEdit(ops::EditMode::Overwrite); });
+
+    QMenu* markers = menuBar()->addMenu(tr("Mar&ker"));
+    add(markers, tr("Add Marker"), QKeySequence(Qt::Key_M), [this] { addMarkerAtPlayhead(false); });
+    add(markers, tr("Add Clip Marker"), QKeySequence("Alt+M"), [this] { addMarkerAtPlayhead(true); });
+    add(markers, tr("Go to Next Marker"), QKeySequence("Shift+M"), [this] { jumpToMarker(true); });
+    add(markers, tr("Go to Previous Marker"), QKeySequence("Ctrl+Shift+M"), [this] { jumpToMarker(false); });
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     add(view, tr("Zoom In"), QKeySequence("="), [this] { timeline()->zoomIn(); });
@@ -623,6 +640,87 @@ bool MainWindow::threePointEdit(ops::EditMode mode) {
     if (!r.value().clipIds.empty()) timeline()->selectClip(qs(r.value().clipIds.front()));
     statusBar()->showMessage(mode == ops::EditMode::Insert ? tr("Inserted") : tr("Overwrote"), 3000);
     return true;
+}
+
+std::vector<std::string> MainWindow::selectedClips() const {
+    const std::string id = timeline()->selectedClipId().toStdString();
+    if (id.empty() || !session_->timeline().clip(id)) return {};
+    return {id};  // linked partners are added by the session
+}
+
+void MainWindow::copySelection(bool cut) {
+    const auto clips = selectedClips();
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select a clip in the timeline first."), 3000);
+        return;
+    }
+    Status s = cut ? session_->cutClips(clips) : session_->copyClips(clips);
+    if (!s.ok()) {
+        showError(cut ? tr("The clips could not be cut.") : tr("The clips could not be copied."), qs(s.error().toString()));
+        return;
+    }
+    if (cut) timeline()->selectClip({});
+    statusBar()->showMessage(tr("%1 %2 clip(s)").arg(cut ? tr("Cut") : tr("Copied")).arg(session_->clipboard().items.size()), 3000);
+}
+
+void MainWindow::pasteClipboard(ops::EditMode mode) {
+    auto r = session_->paste(viewer_->position(), mode);
+    if (!r.ok()) {
+        showError(tr("The clips could not be pasted."), qs(r.error().toString()));
+        return;
+    }
+    if (!r.value().empty()) timeline()->selectClip(qs(r.value().front()));
+    viewer_->setPosition(viewer_->position() + session_->clipboard().span);  // continue after the paste
+}
+
+void MainWindow::duplicateSelection() {
+    const auto clips = selectedClips();
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select a clip in the timeline first."), 3000);
+        return;
+    }
+    auto r = session_->duplicateClips(clips);
+    if (!r.ok()) {
+        showError(tr("The clips could not be duplicated."), qs(r.error().toString()));
+        return;
+    }
+    if (!r.value().empty()) timeline()->selectClip(qs(r.value().front()));
+}
+
+void MainWindow::addMarkerAtPlayhead(bool onClip) {
+    const FrameIndex at = viewer_->position();
+    if (onClip) {
+        const auto clips = selectedClips();
+        if (clips.empty()) {
+            statusBar()->showMessage(tr("Select the clip to mark first."), 3000);
+            return;
+        }
+        auto r = session_->addClipMarker(clips.front(), at);
+        if (!r.ok()) statusBar()->showMessage(qs(r.error().message), 4000);
+        return;
+    }
+    auto r = session_->addMarker(at);
+    if (!r.ok()) statusBar()->showMessage(qs(r.error().message), 4000);
+}
+
+void MainWindow::jumpToMarker(bool next) {
+    const Timeline& tl = session_->timeline();
+    const auto target = next ? tl.nextMarker(viewer_->position()) : tl.previousMarker(viewer_->position());
+    if (target) {
+        setActiveViewer(viewer_);
+        viewer_->setPosition(*target);
+    } else {
+        statusBar()->showMessage(next ? tr("No later marker.") : tr("No earlier marker."), 2000);
+    }
+}
+
+void MainWindow::editMarker(const QString& markerId) {
+    const auto ref = session_->findMarker(markerId.toStdString());
+    if (!ref) return;
+    MarkerDialog dialog(ref->marker, !ref->clipId.empty(), this);
+    const int outcome = dialog.exec();
+    if (outcome == MarkerDialog::Saved) runEdit([&] { return session_->updateMarker(dialog.marker()); });
+    else if (outcome == MarkerDialog::DeleteRequested) runEdit([&] { return session_->removeMarker(markerId.toStdString()); });
 }
 
 }  // namespace up::ui

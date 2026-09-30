@@ -1,6 +1,7 @@
 #include "app/EditorSession.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 
 #include "app/ProjectCommands.h"
@@ -474,4 +475,277 @@ Result<EditorSession::EditResult> EditorSession::threePointEdit(const std::strin
     return EditResult{placed.value(), r.recordIn, r.recordOut()};
 }
 
+// --- Markers ----------------------------------------------------------------------------
+
+namespace {
+
+Marker makeMarker(FrameIndex frame, std::string name, MarkerColor color, std::string comment, FrameIndex duration) {
+    Marker m;
+    m.id = generateId();
+    m.frame = frame;
+    m.name = std::move(name);
+    m.color = color;
+    m.comment = std::move(comment);
+    m.duration = duration;
+    return m;
+}
+
+void sortMarkers(std::vector<Marker>& markers) {
+    std::stable_sort(markers.begin(), markers.end(), [](const Marker& a, const Marker& b) { return a.frame < b.frame; });
+}
+
+Error markerNotFound() {
+    return makeError(ErrorCode::NotFound, "timeline", "The marker no longer exists.", "Refresh the view and try again.");
+}
+
+}  // namespace
+
+Result<std::string> EditorSession::addMarker(FrameIndex frame, std::string name, MarkerColor color, std::string comment,
+                                             FrameIndex duration) {
+    if (frame < 0 || duration < 0) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "Markers must be at or after the start of the timeline.");
+    }
+    Marker m = makeMarker(frame, std::move(name), color, std::move(comment), duration);
+    const std::string id = m.id;
+    UP_TRY(editTimeline("Add Marker", [&](Timeline& t) -> Status {
+        t.markers.push_back(m);
+        sortMarkers(t.markers);
+        return Status::success();
+    }));
+    return id;
+}
+
+Result<std::string> EditorSession::addClipMarker(const std::string& clipId, FrameIndex timelineFrame, std::string name,
+                                                 MarkerColor color, std::string comment) {
+    const Clip* c = timeline().clip(clipId);
+    if (!c) return clipNotFound(clipId);
+    if (!c->contains(timelineFrame)) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "The playhead is not over the selected clip.",
+                         "Move the playhead onto the clip, then add the marker.");
+    }
+    Marker m = makeMarker(c->toSource(timelineFrame), std::move(name), color, std::move(comment), 0);
+    const std::string id = m.id;
+    UP_TRY(editTimeline("Add Clip Marker", [&](Timeline& t) -> Status {
+        Clip* clip = t.clip(clipId);
+        clip->markers.push_back(m);
+        sortMarkers(clip->markers);
+        return Status::success();
+    }));
+    return id;
+}
+
+Status EditorSession::updateMarker(const Marker& marker) {
+    if (marker.duration < 0) return makeError(ErrorCode::OutOfRange, "timeline", "A marker cannot have a negative length.");
+    return editTimeline("Edit Marker", [&](Timeline& t) -> Status {
+        for (auto& m : t.markers) {
+            if (m.id != marker.id) continue;
+            if (marker.frame < 0) return makeError(ErrorCode::OutOfRange, "timeline", "Markers must be at or after frame 0.");
+            m = marker;
+            sortMarkers(t.markers);
+            return Status::success();
+        }
+        for (auto& tr : t.tracks)
+            for (auto& c : tr.clips)
+                for (auto& m : c.markers) {
+                    if (m.id != marker.id) continue;
+                    m = marker;
+                    sortMarkers(c.markers);
+                    return Status::success();
+                }
+        return markerNotFound();
+    });
+}
+
+Status EditorSession::removeMarker(const std::string& markerId) {
+    return editTimeline("Delete Marker", [&](Timeline& t) -> Status {
+        auto erase = [&](std::vector<Marker>& list) {
+            const auto before = list.size();
+            list.erase(std::remove_if(list.begin(), list.end(), [&](const Marker& m) { return m.id == markerId; }),
+                       list.end());
+            return list.size() != before;
+        };
+        if (erase(t.markers)) return Status::success();
+        for (auto& tr : t.tracks)
+            for (auto& c : tr.clips)
+                if (erase(c.markers)) return Status::success();
+        return markerNotFound();
+    });
+}
+
+std::vector<MarkerRef> EditorSession::markers() const {
+    std::vector<MarkerRef> out;
+    const Timeline& tl = timeline();
+    for (const auto& m : tl.markers) out.push_back({m, {}, m.frame});
+    for (const auto& tr : tl.tracks)
+        for (const auto& c : tr.clips)
+            for (const auto& m : c.markers)
+                if (c.contains(c.toTimeline(m.frame))) out.push_back({m, c.id, c.toTimeline(m.frame)});
+    std::stable_sort(out.begin(), out.end(),
+                     [](const MarkerRef& a, const MarkerRef& b) { return a.timelineFrame < b.timelineFrame; });
+    return out;
+}
+
+std::optional<MarkerRef> EditorSession::findMarker(const std::string& markerId) const {
+    const Timeline& tl = timeline();
+    for (const auto& m : tl.markers)
+        if (m.id == markerId) return MarkerRef{m, {}, m.frame};
+    for (const auto& tr : tl.tracks)
+        for (const auto& c : tr.clips)
+            for (const auto& m : c.markers)
+                if (m.id == markerId) return MarkerRef{m, c.id, c.toTimeline(m.frame)};
+    return std::nullopt;
+}
+
+// --- Clipboard ------------------------------------------------------------------------------
+
+Result<Clipboard> EditorSession::captureClips(const std::vector<std::string>& clipIds) const {
+    const Timeline& tl = timeline();
+    std::vector<std::string> ids;
+    for (const auto& id : clipIds) {
+        if (!tl.clip(id)) return clipNotFound(id);
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        for (const auto& partner : tl.linkedClips(id))
+            if (std::find(ids.begin(), ids.end(), partner) == ids.end()) ids.push_back(partner);
+    }
+    if (ids.empty()) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "No clips are selected.", "Select a clip first.");
+    }
+    auto indexOfTrack = [&](const Track* track) {
+        const auto list = tl.tracksOfKind(track->kind);
+        return static_cast<int>(std::find(list.begin(), list.end(), track) - list.begin());
+    };
+    FrameIndex first = std::numeric_limits<FrameIndex>::max();
+    FrameIndex last = 0;
+    int lowest[2] = {std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
+    for (const auto& id : ids) {
+        const Clip* c = tl.clip(id);
+        const Track* t = tl.trackOfClip(id);
+        first = std::min(first, c->start);
+        last = std::max(last, c->end());
+        int& low = lowest[t->kind == TrackKind::Video ? 0 : 1];
+        low = std::min(low, indexOfTrack(t));
+    }
+    Clipboard out;
+    out.span = last - first;
+    for (const auto& id : ids) {
+        const Track* t = tl.trackOfClip(id);
+        ClipboardItem item;
+        item.clip = *tl.clip(id);
+        item.clip.start -= first;
+        item.kind = t->kind;
+        item.trackOffset = indexOfTrack(t) - lowest[t->kind == TrackKind::Video ? 0 : 1];
+        item.sourceTrackId = t->id;
+        out.items.push_back(std::move(item));
+    }
+    return out;
+}
+
+Status EditorSession::copyClips(const std::vector<std::string>& clipIds) {
+    auto captured = captureClips(clipIds);
+    if (!captured.ok()) return captured.error();
+    clipboard_ = std::move(captured.value());
+    return Status::success();
+}
+
+Status EditorSession::cutClips(const std::vector<std::string>& clipIds) {
+    auto captured = captureClips(clipIds);
+    if (!captured.ok()) return captured.error();
+    const Status lifted = editTimeline("Cut", [&](Timeline& t) -> Status {
+        for (const auto& item : captured.value().items) UP_TRY(ops::lift(t, item.clip.id));
+        return Status::success();
+    });
+    if (!lifted.ok()) return lifted;
+    clipboard_ = std::move(captured.value());
+    return Status::success();
+}
+
+Result<std::vector<std::string>> EditorSession::paste(FrameIndex at, ops::EditMode mode) {
+    if (clipboard_.empty()) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "The clipboard is empty.", "Copy or cut clips first.");
+    }
+    return placeClipboard(clipboard_, at, mode, /*onSourceTracks=*/false, mode == ops::EditMode::Insert ? "Paste Insert" : "Paste");
+}
+
+Result<std::vector<std::string>> EditorSession::duplicateClips(const std::vector<std::string>& clipIds) {
+    auto captured = captureClips(clipIds);
+    if (!captured.ok()) return captured.error();
+    FrameIndex first = std::numeric_limits<FrameIndex>::max();
+    for (const auto& id : clipIds) first = std::min(first, timeline().clip(id)->start);
+    for (const auto& item : captured.value().items) first = std::min(first, timeline().clip(item.clip.id)->start);
+    return placeClipboard(captured.value(), first + captured.value().span, ops::EditMode::Overwrite,
+                          /*onSourceTracks=*/true, "Duplicate");
+}
+
+Result<std::vector<std::string>> EditorSession::placeClipboard(const Clipboard& content, FrameIndex at,
+                                                               ops::EditMode mode, bool onSourceTracks,
+                                                               const std::string& name) {
+    if (at < 0) return makeError(ErrorCode::OutOfRange, "timeline", "Cannot paste before the start of the timeline.");
+    for (const auto& item : content.items) {
+        if (!project_.findMedia(item.clip.mediaId)) {
+            return makeError(ErrorCode::NotFound, "timeline",
+                             "'" + item.clip.name + "' refers to media that is not in this project.",
+                             "Import the media into this project first.");
+        }
+    }
+    std::vector<std::string> placed;
+    const Status status = editTimeline(name, [&](Timeline& t) -> Status {
+        placed.clear();
+        // Resolve destination tracks before anything moves.
+        std::vector<std::string> destinations;
+        for (const auto& item : content.items) {
+            if (onSourceTracks) {
+                destinations.push_back(item.sourceTrackId);
+                continue;
+            }
+            const std::string& target = item.kind == TrackKind::Video ? t.videoTarget : t.audioTarget;
+            if (target.empty()) {
+                destinations.emplace_back();  // this kind is not patched: skip
+                continue;
+            }
+            const auto ids = t.trackIdsOfKind(item.kind);
+            const auto base = std::find(ids.begin(), ids.end(), target) - ids.begin();
+            const auto index = static_cast<std::size_t>(base + item.trackOffset);
+            if (index >= ids.size()) {
+                return makeError(ErrorCode::OutOfRange, "timeline",
+                                 "There are not enough " + std::string(toString(item.kind)) +
+                                     " tracks above the target to paste these clips.",
+                                 "Target a lower track or add tracks.");
+            }
+            destinations.push_back(ids[index]);
+        }
+        if (std::all_of(destinations.begin(), destinations.end(), [](const std::string& d) { return d.empty(); })) {
+            return makeError(ErrorCode::InvalidArgument, "timeline", "No target track is enabled for the copied clips.",
+                             "Click a track's target box in the timeline header.");
+        }
+        if (mode == ops::EditMode::Insert) {
+            for (const auto& track : t.tracks)
+                if (!track.locked) UP_TRY(ops::insertGap(t, track.id, at, content.span));
+        }
+        std::map<std::string, std::string> links;  // copied link id -> fresh link id
+        for (std::size_t i = 0; i < content.items.size(); ++i) {
+            if (destinations[i].empty()) continue;
+            Clip clip = content.items[i].clip;
+            clip.id.clear();
+            clip.start += at;
+            if (!clip.linkId.empty()) {
+                auto [it, inserted] = links.try_emplace(clip.linkId, generateId());
+                clip.linkId = it->second;
+            }
+            for (auto& m : clip.markers) m.id = generateId();
+            auto id = ops::placeClip(t, destinations[i], std::move(clip), ops::EditMode::Overwrite);
+            if (!id.ok()) return id.error();
+            placed.push_back(id.value());
+        }
+        // A pasted clip whose partner was skipped (disabled target) is no longer linked.
+        for (const auto& id : placed) {
+            Clip* c = t.clip(id);
+            if (!c->linkId.empty() && t.linkedClips(id).empty()) c->linkId.clear();
+        }
+        return Status::success();
+    });
+    if (!status.ok()) return status.error();
+    return placed;
+}
+
 }  // namespace up
+

@@ -46,6 +46,8 @@ public:
     // Insert/overwrite the source monitor's clip into the timeline (three-point edit).
     bool threePointEdit(ops::EditMode mode);
     void setActiveViewer(ViewerPanel* viewer);
+    // Opens the marker dialog for a timeline or clip marker and applies the result.
+    void editMarker(const QString& markerId);
     TimelineView* timeline() const;
     MediaAssets* assets() const { return assets_.get(); }
 
@@ -79,6 +81,12 @@ private:
     void markIn(ViewerPanel* viewer, FrameIndex frame);
     void markOut(ViewerPanel* viewer, FrameIndex frame);
     void clearMarks(ViewerPanel* viewer);
+    std::vector<std::string> selectedClips() const;
+    void copySelection(bool cut);
+    void pasteClipboard(ops::EditMode mode);
+    void duplicateSelection();
+    void addMarkerAtPlayhead(bool onClip);
+    void jumpToMarker(bool next);
 
     // Edit commands operating on the selected clip / playhead.
     void razor();

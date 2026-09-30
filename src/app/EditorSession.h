@@ -22,6 +22,27 @@ struct TrackState {
     double gainDb = 0.0;
 };
 
+// A marker together with where it lives and where it currently appears.
+struct MarkerRef {
+    Marker marker;
+    std::string clipId;  // empty for timeline markers
+    FrameIndex timelineFrame = 0;
+};
+
+// Copied clips, positioned relative to the earliest copied clip.
+struct ClipboardItem {
+    Clip clip;               // clip.start is relative to the copied range start
+    TrackKind kind = TrackKind::Video;
+    int trackOffset = 0;     // tracks above the lowest copied track of this kind
+    std::string sourceTrackId;
+};
+
+struct Clipboard {
+    std::vector<ClipboardItem> items;
+    FrameIndex span = 0;  // length of the copied range
+    bool empty() const { return items.empty(); }
+};
+
 struct ImportReport {
     std::vector<std::string> importedIds;
     std::vector<Error> failures;
@@ -105,6 +126,33 @@ public:
     // timeline marks afterwards. One undo step.
     Result<EditResult> threePointEdit(const std::string& mediaId, ops::EditMode mode, FrameIndex playhead);
 
+    // --- Markers ----------------------------------------------------------------------
+    Result<std::string> addMarker(FrameIndex frame, std::string name = {}, MarkerColor color = MarkerColor::Blue,
+                                  std::string comment = {}, FrameIndex duration = 0);
+    // Adds a marker to a clip at a timeline frame inside it; it is stored in source frames.
+    Result<std::string> addClipMarker(const std::string& clipId, FrameIndex timelineFrame, std::string name = {},
+                                      MarkerColor color = MarkerColor::Red, std::string comment = {});
+    // Replaces name, comment, colour and duration (and, for timeline markers, the frame).
+    Status updateMarker(const Marker& marker);
+    Status removeMarker(const std::string& markerId);
+    std::optional<MarkerRef> findMarker(const std::string& markerId) const;
+    // Every marker in timeline order (clip markers only while visible in their clip).
+    std::vector<MarkerRef> markers() const;
+
+    // --- Clipboard ------------------------------------------------------------------
+    // Copies clips and their linked partners (not undoable; does not change the project).
+    Status copyClips(const std::vector<std::string>& clipIds);
+    // Copy, then lift the clips (one undo step).
+    Status cutClips(const std::vector<std::string>& clipIds);
+    // Pastes at `at` on the targeted tracks: each kind's lowest copied track lands on
+    // that kind's target, the others keep their offset. A disabled target skips that
+    // kind. Insert opens a gap on every unlocked track first. Returns the new clip ids.
+    Result<std::vector<std::string>> paste(FrameIndex at, ops::EditMode mode);
+    // Copies the clips (with linked partners) onto their own tracks, directly after the
+    // last of them, overwriting whatever is there. Does not touch the clipboard.
+    Result<std::vector<std::string>> duplicateClips(const std::vector<std::string>& clipIds);
+    const Clipboard& clipboard() const { return clipboard_; }
+
     bool undo() { return history_.undo(); }
     bool redo() { return history_.redo(); }
 
@@ -114,8 +162,13 @@ private:
     explicit EditorSession(Project project);
     Status editTimeline(const std::string& name, std::function<Status(Timeline&)> edit);
 
+    Result<Clipboard> captureClips(const std::vector<std::string>& clipIds) const;
+    Result<std::vector<std::string>> placeClipboard(const Clipboard& content, FrameIndex at, ops::EditMode mode,
+                                                     bool onSourceTracks, const std::string& name);
+
     Project project_;
     CommandStack history_;
+    Clipboard clipboard_;
     ChangeListener listener_;
 };
 

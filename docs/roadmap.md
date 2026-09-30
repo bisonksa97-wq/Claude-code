@@ -14,8 +14,9 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 ## Phase 2: Timeline ◐
 - ✅ Tracks, clips, playhead, selection, overwrite/insert/append, razor, lift/ripple delete, trim/ripple/roll/slip/slide/move, linked A/V, snapping
 - ✅ Timeline in/out points and track targeting (session 4)
-- ☐ Markers, add/remove/rename tracks in the UI
-- ☐ Copy/paste, duplicate
+- ✅ Timeline and clip markers with navigation (session 5)
+- ☐ Multi-clip selection (marquee, Ctrl-click), markers list panel, add/remove/rename tracks in the UI
+- ✅ Copy/cut/paste (overwrite and insert), duplicate (session 5)
 - ☐ Nested timelines / compound clips
 
 ## Phase 3: Video engine ◐
@@ -36,7 +37,7 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Clip clipboard and markers (finishing Phase 2 editing essentials):**
-1. Copy/cut/paste and duplicate of clips (with linked partners) through `EditorSession`, pasting at the playhead on the targeted tracks, with overwrite and insert variants.
-2. Timeline and clip markers (name, colour, comment) in the model (format v3 with a migration), shown on the ruler and in clips, with next/previous-marker navigation.
-3. Tests: paste positioning and linking, undo, marker persistence and migration.
+**Multi-clip selection and track management (last Phase 2 gaps):**
+1. A selection model (set of clip ids) in the timeline: Ctrl/Shift-click, marquee drag, select-all-forward. Move, delete, copy and duplicate then act on the whole selection through the existing list-based session APIs.
+2. Add, remove, rename and reorder tracks through `EditorSession` (undoable; targets fixed up; a track with clips needs confirmation).
+3. Tests: selection semantics, multi-clip move/delete and their undo, track operations and target repair.
