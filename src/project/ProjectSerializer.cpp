@@ -116,11 +116,27 @@ ClipTransform transformFromJson(const json& j) {
     return t;
 }
 
+json toJson(const std::optional<Transition>& t) {
+    if (!t) return nullptr;
+    return json{{"kind", toString(t->kind)}, {"duration", t->duration}, {"alignment", toString(t->alignment)}};
+}
+
+std::optional<Transition> transitionFromJson(const json& j, const char* key) {
+    if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+    const json& tj = j.at(key);
+    Transition t;
+    t.kind = transitionKindFromString(tj.value("kind", "dissolve")).value_or(TransitionKind::Dissolve);
+    t.duration = tj.at("duration").get<FrameIndex>();
+    t.alignment = transitionAlignmentFromString(tj.value("alignment", "center")).value_or(TransitionAlignment::Center);
+    return t;
+}
+
 json toJson(const Clip& c) {
     return json{{"id", c.id},         {"mediaId", c.mediaId},   {"name", c.name},
                 {"start", c.start},   {"duration", c.duration}, {"sourceIn", c.sourceIn},
                 {"sourceLength", c.sourceLength}, {"linkId", c.linkId}, {"enabled", c.enabled},
-                {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}, {"transform", toJson(c.transform)}};
+                {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}, {"transform", toJson(c.transform)},
+                {"transitionIn", toJson(c.transitionIn)}, {"transitionOut", toJson(c.transitionOut)}};
 }
 
 Clip clipFromJson(const json& j) {
@@ -137,6 +153,8 @@ Clip clipFromJson(const json& j) {
     c.gainDb = j.value("gainDb", 0.0);
     c.markers = markersFromJson(j.value("markers", json::array()));
     c.transform = transformFromJson(j.value("transform", json::object()));
+    c.transitionIn = transitionFromJson(j, "transitionIn");
+    c.transitionOut = transitionFromJson(j, "transitionOut");
     return c;
 }
 

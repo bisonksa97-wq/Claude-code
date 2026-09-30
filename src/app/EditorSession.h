@@ -131,6 +131,17 @@ public:
     // Back to the default value with no keyframes.
     Status resetClipParameter(const std::string& clipId, ClipParam param);
 
+    // --- Transitions and fades ---------------------------------------------------------
+    // Sets (or clears, with nullopt) the transition at one edge of a clip. With `withLinked`,
+    // linked partners whose same edge lines up get the same transition (video dissolve +
+    // audio crossfade). Refuses lengths the media cannot supply and says how much fits.
+    Status setTransition(const std::string& clipId, ops::Edge edge, std::optional<Transition> transition,
+                         bool withLinked = true);
+    // Adds a transition of `preferred` frames (default 1 s) at the edge of the clip nearest
+    // to `frame`, shortened to what the media allows. Returns the length applied.
+    Result<FrameIndex> applyDefaultTransition(const std::string& clipId, FrameIndex frame,
+                                              TransitionKind kind = TransitionKind::Dissolve, FrameIndex preferred = 0);
+
     // --- Tracks ------------------------------------------------------------------------
     // Adds a track above the others of its kind. Returns its id.
     Result<std::string> addTrack(TrackKind kind, std::string name = {});

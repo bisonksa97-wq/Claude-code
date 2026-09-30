@@ -12,8 +12,10 @@ namespace up::render {
 // Mixes a timeline's audio tracks to interleaved stereo float.
 //
 // Track rules: disabled or muted tracks are silent; if any track is soloed only
-// soloed tracks play. Gain = track gain (dB) + clip gain (dB). No panning,
-// effects or automation yet. Output is not clipped here (the encoder clamps).
+// soloed tracks play. Gain = track gain (dB) + clip gain (dB), times the clip's
+// sample-accurate transition envelope (constant-power crossfades and fades; clips
+// play into their handles during edit-point transitions). No panning, effects or
+// automation yet. Output is not clipped here (the encoder clamps).
 class AudioMixer {
 public:
     static constexpr int kChannels = 2;

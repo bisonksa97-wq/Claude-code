@@ -174,6 +174,10 @@ Transforms (params: positionX positionY scale rotation opacity cropLeft cropRigh
   param <project> <clip> interp <param> linear|hold|ease --at <pos>
   param <project> <clip> reset <param>
 
+Transitions (at a clip's head: with an adjacent clip before it, an edit-point transition; else a fade)
+  transition <project> <clip> in|out dissolve|dip <frames> [--align center|start|end] [--solo]
+  transition <project> <clip> in|out none                 --solo leaves linked partners alone
+
 Tracks
   track <project> add video|audio [--name N]
   track <project> remove <track> [--force]      --force also deletes the track's clips
@@ -211,7 +215,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string command = argv[1];
-    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose", "force", "key"});
+    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose", "force", "key", "solo"});
     log::setDefaultLevel(args.flag("verbose") ? log::Level::Debug : log::Level::Warning);
     if (!args.unknown().empty()) return usageError("option " + args.unknown().front() + " needs a value");
     const auto& pos = args.positional();
@@ -494,6 +498,28 @@ int main(int argc, char** argv) {
         }
         if (!st.ok()) return fail(st.error());
         return saveAndReport(session, "Updated " + std::string(paramInfo(*param).id));
+    }};
+
+    commands["transition"] = {4, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        auto clip = resolveClip(s.value()->timeline(), pos[1]);
+        if (!clip.ok()) return fail(clip.error());
+        if (pos[2] != "in" && pos[2] != "out") return usageError("the edge must be in or out");
+        const ops::Edge edge = pos[2] == "in" ? ops::Edge::In : ops::Edge::Out;
+        std::optional<Transition> transition;
+        if (pos[3] != "none") {
+            const auto kind = transitionKindFromString(pos[3]);
+            if (!kind) return usageError("the kind must be dissolve, dip or none");
+            if (pos.size() < 5) return usageError("give the length in frames");
+            const auto length = parseFrame(pos[4], s.value()->timeline().frameRate);
+            const auto align = transitionAlignmentFromString(a.option("align").value_or("center"));
+            if (!length || !align) return usageError("invalid length or --align");
+            transition = Transition{*kind, *length, *align};
+        }
+        Status st = s.value()->setTransition(clip.value(), edge, transition, !a.flag("solo"));
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), transition ? "Transition set" : "Transition removed");
     }};
 
     commands["track"] = {3, [&](const cli::Args& a) {

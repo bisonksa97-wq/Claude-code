@@ -89,6 +89,8 @@ private:
     void duplicateSelection();
     void addMarkerAtPlayhead(bool onClip);
     void jumpToMarker(bool next);
+    void applyTransition(TransitionKind kind);
+    void removeTransitions();
 
     // Edit commands operating on the selected clip / playhead.
     void razor();

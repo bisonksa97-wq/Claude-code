@@ -7,14 +7,20 @@
 
 namespace up::render {
 
+namespace detail {
+struct Layer;
+}
+
 // Produces the picture of a timeline at a given frame.
 //
-// Every enabled video track is composited bottom (V1) to top over black, using each
-// clip's transform evaluated at the frame: the source is first fitted to the
-// timeline frame (aspect preserved), then scaled, rotated, moved, cropped and
-// blended with its opacity (straight-alpha "over"). Layers under a fully opaque,
-// frame-covering layer are skipped. Offline media renders as a layer of the offline
-// colour so problems are visible rather than silently black.
+// Every enabled video track is composited bottom (V1) to top over black. A clip is
+// fitted to the timeline frame (aspect preserved), then its transform, evaluated at
+// the frame, scales, rotates, moves and crops it, and it is blended with its opacity
+// (straight-alpha "over"). During a transition a track shows a mix of "below +
+// outgoing", "below" and "below + incoming" (see timeline/Transitions.h), which is
+// exact even over lower tracks. Layers under a fully opaque, frame-covering layer are
+// skipped. Offline media renders as a layer of the offline colour so problems are
+// visible rather than silently black.
 class FrameCompositor {
 public:
     explicit FrameCompositor(MediaResolver resolver, std::size_t decoderCapacity = 16);
@@ -26,6 +32,8 @@ public:
     static constexpr uint8_t kOfflineColor[3] = {140, 20, 40};
 
 private:
+    Status drawLayer(VideoFrame& canvas, const detail::Layer& layer, const Timeline& timeline, FrameIndex frame);
+
     MediaResolver resolver_;
     DecoderPool pool_;
 };

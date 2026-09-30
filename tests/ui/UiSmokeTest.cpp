@@ -477,6 +477,51 @@ TEST(Ui, InspectorEditsTransformsAndKeyframes) {
     EXPECT_EQ(tl.clip(video)->transform[ClipParam::Opacity].keys.size(), 1u);
 }
 
+TEST(Ui, TransitionsFromTheEditMenu) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 75));
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 75));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 850);
+    auto session = EditorSession::createNew("Tx", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->placeMedia(ids[0], 0, ops::EditMode::Overwrite, {}, {}, 0, 50).ok());
+    ASSERT_TRUE(session->placeMedia(ids[1], 50, ops::EditMode::Overwrite, {}, {}, 25, 50).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    const std::string blue = tl.tracks[0].clips[1].id;
+
+    // Playhead near blue's head: Ctrl+T puts a 1 s dissolve on the cut (video and linked audio).
+    window.timeline()->selectClip(QString::fromStdString(blue));
+    window.viewer()->setPosition(52);
+    findAction(&window, "Apply Cross Dissolve")->trigger();
+    ASSERT_TRUE(tl.clip(blue)->transitionIn.has_value());
+    EXPECT_EQ(tl.clip(blue)->transitionIn->duration, 25);
+    EXPECT_TRUE(tl.tracks[2].clips[1].transitionIn.has_value());
+
+    window.viewer()->setPosition(49);
+    QApplication::processEvents();
+    const QImage mid = window.viewer()->currentImage();
+    const QColor c = mid.pixelColor(mid.width() / 2, mid.height() / 2);
+    EXPECT_GT(c.red(), 80);
+    EXPECT_GT(c.blue(), 80);  // both pictures visible mid-dissolve
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_TRANSITIONS")) {
+        window.timeline()->zoomToFit();
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+
+    findAction(&window, "Remove Transitions")->trigger();
+    EXPECT_FALSE(tl.clip(blue)->transitionIn.has_value());
+    EXPECT_FALSE(tl.tracks[2].clips[1].transitionIn.has_value());
+    window.session()->undo();
+    EXPECT_TRUE(tl.clip(blue)->transitionIn.has_value());
+}
+
 TEST(Ui, ThemesUseCentralTokens) {
     for (auto kind : {ui::ThemeKind::Dark, ui::ThemeKind::Light, ui::ThemeKind::HighContrast}) {
         ui::applyTheme(*qApp, kind);

@@ -11,7 +11,9 @@
 #include "core/Log.h"
 #include "media/MediaLibrary.h"
 #include "project/ProjectSerializer.h"
+#include "core/Timecode.h"
 #include "timeline/ThreePointEdit.h"
+#include "timeline/Transitions.h"
 
 namespace up {
 namespace fs = std::filesystem;
@@ -1013,6 +1015,79 @@ Status EditorSession::resetClipParameter(const std::string& clipId, ClipParam pa
         c.value()->transform[param] = AnimatedValue{paramInfo(param).defaultValue, {}};
         return Status::success();
     });
+}
+
+// --- Transitions ------------------------------------------------------------------------
+
+namespace {
+
+// The clip plus linked partners (on unlocked tracks) whose `edge` lines up with it.
+std::vector<std::string> edgeGroup(const Timeline& t, const std::string& clipId, ops::Edge edge, bool withLinked) {
+    std::vector<std::string> out{clipId};
+    if (!withLinked) return out;
+    const Clip* c = t.clip(clipId);
+    const FrameIndex at = edge == ops::Edge::In ? c->start : c->end();
+    for (const auto& id : editableGroup(t, clipId)) {
+        if (id == clipId) continue;
+        const Clip* p = t.clip(id);
+        if ((edge == ops::Edge::In ? p->start : p->end()) == at) out.push_back(id);
+    }
+    return out;
+}
+
+FrameIndex groupMaxDuration(const Timeline& t, const std::vector<std::string>& ids, ops::Edge edge,
+                            TransitionAlignment alignment) {
+    FrameIndex most = std::numeric_limits<FrameIndex>::max();
+    for (const auto& id : ids)
+        most = std::min(most, transitions::maxDuration(*t.trackOfClip(id), *t.clip(id), edge == ops::Edge::In, alignment));
+    return most;
+}
+
+}  // namespace
+
+Status EditorSession::setTransition(const std::string& clipId, ops::Edge edge, std::optional<Transition> transition,
+                                    bool withLinked) {
+    if (transition && transition->duration <= 0) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "A transition must be at least one frame long.");
+    }
+    const char* name = !transition ? "Remove Transition" : edge == ops::Edge::In ? "Add Transition In" : "Add Transition Out";
+    return editTimeline(name, [&](Timeline& t) -> Status {
+        if (!t.clip(clipId)) return clipNotFound(clipId);
+        const Track* own = t.trackOfClip(clipId);
+        if (own->locked) return makeError(ErrorCode::Locked, "timeline", "Track " + own->name + " is locked.", "Unlock it first.");
+        const auto ids = edgeGroup(t, clipId, edge, withLinked);
+        if (transition) {
+            const FrameIndex most = groupMaxDuration(t, ids, edge, transition->alignment);
+            if (transition->duration > most) {
+                return makeError(ErrorCode::OutOfRange, "timeline",
+                                 "There is not enough media for a " + std::to_string(transition->duration) +
+                                     "-frame transition here; at most " + std::to_string(most) + " frame(s) fit.",
+                                 "Use a shorter transition, or trim the clips so unused media (handles) remains beyond the cut.");
+            }
+        }
+        for (const auto& id : ids) {
+            Clip* c = t.clip(id);
+            (edge == ops::Edge::In ? c->transitionIn : c->transitionOut) = transition;
+        }
+        return Status::success();
+    });
+}
+
+Result<FrameIndex> EditorSession::applyDefaultTransition(const std::string& clipId, FrameIndex frame,
+                                                         TransitionKind kind, FrameIndex preferred) {
+    const Timeline& tl = timeline();
+    const Clip* c = tl.clip(clipId);
+    if (!c) return clipNotFound(clipId);
+    if (preferred <= 0) preferred = std::max<FrameIndex>(2, nominalFps(tl.frameRate));  // one second
+    const ops::Edge edge = std::abs(frame - c->start) <= std::abs(c->end() - frame) ? ops::Edge::In : ops::Edge::Out;
+    const FrameIndex most = groupMaxDuration(tl, edgeGroup(tl, clipId, edge, true), edge, TransitionAlignment::Center);
+    const FrameIndex length = std::min(preferred, most);
+    if (length < 2) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "There is not enough media at this edit for a transition.",
+                         "Trim the clips so unused media (handles) remains beyond the cut.");
+    }
+    UP_TRY(setTransition(clipId, edge, Transition{kind, length, TransitionAlignment::Center}, true));
+    return length;
 }
 
 }  // namespace up

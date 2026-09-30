@@ -3,7 +3,7 @@
 Status labels follow the master prompt: **IMPLEMENTED** · **PARTIAL** · **INTERFACE ONLY** · **PLACEHOLDER** · **NOT IMPLEMENTED**.
 A feature is only IMPLEMENTED when it has a model, engine code, UI and/or CLI, error handling, persistence where needed, undo where applicable, tests and docs.
 
-_Last updated: session 7._
+_Last updated: session 8._
 
 ## First vertical slice (§90)
 
@@ -27,7 +27,7 @@ _Last updated: session 7._
 | # | Capability | Status | Notes |
 |---|---|---|---|
 | 1 | Media management | PARTIAL | Import, probe metadata, search, offline detection, relink/replace. **Thumbnails** in the media pool (small/large toggle) and on video clips, **waveforms** on audio clips, generated in the background and cached. Bins exist in the model (one "Master" bin); there is no bin UI, ratings/keywords UI, filmstrip view or hover scrub. |
-| 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset. No effects, transitions or nesting. |
+| 2 | Professional video editing | PARTIAL | Multitrack V/A timeline, linked clips, full trim toolset, cross dissolve / dip to black transitions and fades, keyframed transforms. No effects, wipes or nesting. |
 | 3 | Fast cutting | PARTIAL | Razor, lift, ripple delete, keyboard trims, **source monitor with three-point insert/overwrite** (I/O marks, `,` and `.`), source patching. No Cut workspace, no match frame, no J/K/L. |
 | 4 | Multicam | NOT IMPLEMENTED | |
 | 5 | Timeline editing | IMPLEMENTED | See [timeline.md](timeline.md). Includes in/out marks, track targeting, timeline and clip markers (dialog, navigation) and copy/cut/paste/duplicate. Also multi-clip selection (Ctrl/Shift-click, box selection, select all/forward) with group move and delete, and track add/remove/rename/reorder. Missing: a markers list panel, paste attributes, nesting/compound clips. |
@@ -36,7 +36,7 @@ _Last updated: session 7._
 | 8 | 2D compositing | PARTIAL | All video tracks blend bottom-to-top with transforms and opacity (straight-alpha over). No blend modes, masks or node graph. |
 | 9–15 | 3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
 | 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
-| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; stereo mix for playback and export. No pan, EQ, dynamics, automation or buses. |
+| 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain, clip gain, mute, solo, enable; constant-power crossfades and clip fades; stereo mix for playback and export. No pan, EQ, dynamics, automation or buses. |
 | 21–22 | ADR, Foley | NOT IMPLEMENTED | |
 | 23 | Captions/subtitles | NOT IMPLEMENTED | |
 | 24–30 | AI search, masking, tracking, enhancement, audio AI, generative video/audio | NOT IMPLEMENTED | No AI provider abstraction yet (planned for Phase 10). |

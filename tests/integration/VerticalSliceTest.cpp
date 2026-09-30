@@ -13,6 +13,7 @@
 #include "codec/MediaProbe.h"
 #include "codec/VideoDecoder.h"
 #include "project/ProjectSerializer.h"
+#include "render/AudioMixer.h"
 #include "render/ExportJob.h"
 #include "render/FrameCompositor.h"
 #include "support/TestSupport.h"
@@ -224,3 +225,135 @@ TEST(VerticalSlice, CompositorBlendsTracksWithTransforms) {
     EXPECT_GT(at(20, 80, 60)[2], 200);
 }
 
+
+namespace {
+
+// red [0,50) using source 0..50 of 75 (25-frame tail handle, 440 Hz tone);
+// blue [50,100) using source 25..75 of 75 (25-frame head handle, silent).
+struct TransitionFixture {
+    test::TempDir dir;
+    std::unique_ptr<EditorSession> session;
+    std::string redVideo, blueVideo, redAudio, blueAudio;
+
+    TransitionFixture() {
+        media::SyntheticSpec red = test::solid(220, 20, 20, 75, 440);
+        red.toneLevel = 0.5f;
+        test::makeMedia(dir / "red.mp4", red);
+        test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 75, 0.0));
+        session = EditorSession::createNew("Tx", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+        const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+        EXPECT_TRUE(session->placeMedia(ids[0], 0, ops::EditMode::Overwrite, {}, {}, 0, 50).ok());
+        EXPECT_TRUE(session->placeMedia(ids[1], 50, ops::EditMode::Overwrite, {}, {}, 25, 50).ok());
+        const Timeline& tl = session->timeline();
+        redVideo = tl.tracks[0].clips[0].id;
+        blueVideo = tl.tracks[0].clips[1].id;
+        redAudio = tl.tracks[2].clips[0].id;
+        blueAudio = tl.tracks[2].clips[1].id;
+    }
+
+    test::Rgb color(FrameIndex f) {
+        render::FrameCompositor compositor(render::resolverFor(session->project()));
+        auto frame = compositor.render(session->timeline(), f);
+        EXPECT_TRUE(frame.ok());
+        return frame.ok() ? test::averageColor(frame.value()) : test::Rgb{};
+    }
+};
+
+double windowRms(const std::vector<float>& s) {
+    double sum = 0;
+    for (float v : s) sum += static_cast<double>(v) * v;
+    return std::sqrt(sum / static_cast<double>(s.size()));
+}
+
+}  // namespace
+
+TEST(Transitions, CrossDissolveAndDipRenderThroughTheDecoder) {
+    TransitionFixture fx;
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::In,
+                                          Transition{TransitionKind::Dissolve, 20, TransitionAlignment::Center}, false)
+                    .ok());
+    // Region [40,60): progress (f - 40 + 0.5) / 20.
+    const auto before = fx.color(39);
+    EXPECT_GT(before.r, 200);
+    const auto start = fx.color(40);  // 2.5% blue
+    EXPECT_GT(start.r, 190);
+    const auto mid = fx.color(49);    // 47.5% blue, drawn from red's tail handle and blue's head handle
+    EXPECT_NEAR(mid.r, 220 * 0.525 + 20 * 0.475, 10);
+    EXPECT_NEAR(mid.b, 20 * 0.525 + 220 * 0.475, 10);
+    EXPECT_GT(fx.color(59).b, 200);
+
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::In,
+                                          Transition{TransitionKind::Dip, 20, TransitionAlignment::Center}, false)
+                    .ok());
+    const auto dip = fx.color(49);  // 95% of the way to black
+    EXPECT_LT(dip.r, 25);
+    EXPECT_LT(dip.b, 25);
+    EXPECT_GT(fx.color(44).r, 70);  // still fading out of red
+}
+
+TEST(Transitions, FadeInFromBlackAndOutToBlack) {
+    TransitionFixture fx;
+    ASSERT_TRUE(fx.session->setTransition(fx.redVideo, ops::Edge::In, Transition{TransitionKind::Dissolve, 10}, false).ok());
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::Out, Transition{TransitionKind::Dissolve, 10}, false).ok());
+    EXPECT_LT(fx.color(0).r, 20);          // 5% up
+    EXPECT_NEAR(fx.color(4).r, 220 * 0.45, 12);
+    EXPECT_GT(fx.color(10).r, 200);
+    EXPECT_GT(fx.color(89).b, 200);
+    EXPECT_LT(fx.color(99).b, 20);         // 95% down
+}
+
+TEST(Transitions, AudioCrossfadeIsConstantPowerAndPlaysIntoHandles) {
+    TransitionFixture fx;
+    ASSERT_TRUE(fx.session->setTransition(fx.blueAudio, ops::Edge::In, Transition{TransitionKind::Dissolve, 20}, false).ok());
+    render::AudioMixer mixer(render::resolverFor(fx.session->project()));
+    const Timeline& tl = fx.session->timeline();
+    auto rmsAt = [&](FrameIndex f) {
+        std::vector<float> buf;
+        EXPECT_TRUE(mixer.mix(tl, frameToSample(f, tl.frameRate, 48000), 960, buf).ok());  // half a frame
+        return windowRms(buf);
+    };
+    const double full = 0.5 / std::sqrt(2.0);
+    EXPECT_NEAR(rmsAt(20), full, 0.02);
+    // Red (outgoing) follows cos(p * pi/2) across [40, 60); blue is silent.
+    EXPECT_NEAR(rmsAt(50), full * std::cos(0.5 * 1.5707963), 0.03);  // plays past its cut into the handle
+    EXPECT_NEAR(rmsAt(44), full * std::cos(0.2 * 1.5707963), 0.03);
+    EXPECT_LT(rmsAt(60), 0.005);
+}
+
+TEST(Transitions, SessionValidatesHandlesAndLinksAudio) {
+    TransitionFixture fx;
+    // Blue has a 25-frame head handle, red a 25-frame tail handle: centred, at most 50 frames.
+    auto tooLong = fx.session->setTransition(fx.blueVideo, ops::Edge::In, Transition{TransitionKind::Dissolve, 60});
+    ASSERT_FALSE(tooLong.ok());
+    EXPECT_NE(tooLong.error().message.find("at most 50"), std::string::npos);
+    // Linked audio gets the matching crossfade in the same undo step.
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::In, Transition{TransitionKind::Dissolve, 30}).ok());
+    const Timeline& tl = fx.session->timeline();
+    EXPECT_EQ(tl.clip(fx.blueAudio)->transitionIn->duration, 30);
+    fx.session->undo();
+    EXPECT_FALSE(tl.clip(fx.blueAudio)->transitionIn.has_value());
+    EXPECT_FALSE(tl.clip(fx.blueVideo)->transitionIn.has_value());
+
+    // The default transition picks the nearest edge and fits the available media.
+    auto applied = fx.session->applyDefaultTransition(fx.blueVideo, 52, TransitionKind::Dissolve, 80);
+    ASSERT_TRUE(applied.ok()) << applied.error().toString();
+    EXPECT_EQ(applied.value(), 50);
+    auto tail = fx.session->applyDefaultTransition(fx.blueVideo, 95);
+    ASSERT_TRUE(tail.ok());
+    EXPECT_EQ(tl.clip(fx.blueVideo)->transitionOut->duration, 25);  // one second at 25 fps
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::Out, std::nullopt).ok());
+    EXPECT_FALSE(tl.clip(fx.blueAudio)->transitionOut.has_value());
+}
+
+TEST(Transitions, ExportedDissolve) {
+    TransitionFixture fx;
+    ASSERT_TRUE(fx.session->setTransition(fx.blueVideo, ops::Edge::In, Transition{TransitionKind::Dissolve, 20}).ok());
+    render::ExportOptions options;
+    options.output = fx.dir / "dissolve.mp4";
+    ASSERT_TRUE(render::ExportJob(fx.session->project(), fx.session->timeline().id, options).run().ok());
+    auto dec = VideoDecoder::open(options.output);
+    ASSERT_TRUE(dec.ok());
+    const auto mid = test::averageColor(dec.value()->frameAt(49 / 25.0 + 0.001).value());
+    EXPECT_NEAR(mid.r, 220 * 0.525 + 20 * 0.475, 12);
+    EXPECT_NEAR(mid.b, 20 * 0.525 + 220 * 0.475, 12);
+}

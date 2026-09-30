@@ -49,6 +49,16 @@ const ProjectMigrator& ProjectMigrator::standard() {
                     for (auto& clip : tr["clips"]) clip["transform"] = nlohmann::json::object();
             return Status::success();
         });
+        // v4 -> v5: clips gain optional head/tail transitions (none for existing clips).
+        m.addStep(4, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"])
+                for (auto& tr : tl["tracks"])
+                    for (auto& clip : tr["clips"]) {
+                        clip["transitionIn"] = nullptr;
+                        clip["transitionOut"] = nullptr;
+                    }
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

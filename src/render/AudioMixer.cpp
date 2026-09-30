@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "core/Log.h"
+#include "timeline/Transitions.h"
 
 namespace up::render {
 
@@ -21,14 +22,17 @@ Status AudioMixer::mix(const Timeline& timeline, int64_t start, int64_t count, s
     const auto tracks = timeline.tracksOfKind(TrackKind::Audio);
     const bool anySolo = std::any_of(tracks.begin(), tracks.end(), [](const Track* t) { return t->solo; });
 
+    const double framesPerSample = timeline.frameRate.toDouble() / rate;
     for (const Track* track : tracks) {
         if (!track->enabled || track->muted || (anySolo && !track->solo)) continue;
+        const auto regions = transitions::regions(*track);
         for (const Clip& clip : track->clips) {
             if (!clip.enabled) continue;
+            // Audible range: the clip body plus handles used by edit-point transitions.
+            const auto [firstFrame, lastFrame] = transitions::audibleRange(regions, clip);
             const int64_t clipStart = frameToSample(clip.start, timeline.frameRate, rate);
-            const int64_t clipEnd = frameToSample(clip.end(), timeline.frameRate, rate);
-            const int64_t from = std::max(start, clipStart);
-            const int64_t to = std::min(end, clipEnd);
+            const int64_t from = std::max(start, frameToSample(firstFrame, timeline.frameRate, rate));
+            const int64_t to = std::min(end, frameToSample(lastFrame, timeline.frameRate, rate));
             if (to <= from) continue;
 
             const MediaItem* media = resolver_ ? resolver_(clip.mediaId) : nullptr;
@@ -42,8 +46,19 @@ Status AudioMixer::mix(const Timeline& timeline, int64_t start, int64_t count, s
             scratch_.resize(static_cast<std::size_t>(to - from) * kChannels);
             UP_TRY(decoder.value()->read(sourceStart, to - from, scratch_.data()));
             const auto gain = static_cast<float>(dbToLinear(track->gainDb + clip.gainDb));
+            const bool faded = std::any_of(regions.begin(), regions.end(), [&](const transitions::Region& r) {
+                return r.outgoing == &clip || r.incoming == &clip;
+            });
             float* dst = out.data() + (from - start) * kChannels;
-            for (std::size_t i = 0; i < scratch_.size(); ++i) dst[i] += scratch_[i] * gain;
+            for (int64_t i = 0; i < to - from; ++i) {
+                float g = gain;
+                if (faded) {
+                    // Sample-accurate envelope: position of this sample in (fractional) timeline frames.
+                    const double framePos = static_cast<double>(from + i) * framesPerSample;
+                    g *= static_cast<float>(transitions::audioEnvelope(regions, clip, framePos));
+                }
+                for (int c = 0; c < kChannels; ++c) dst[i * kChannels + c] += scratch_[static_cast<std::size_t>(i * kChannels + c)] * g;
+            }
         }
     }
     return Status::success();

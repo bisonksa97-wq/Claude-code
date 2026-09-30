@@ -33,6 +33,15 @@ Every operation is **all-or-nothing**: it runs on a copy, validates, and commits
 | `moveClip` | Moves to a position/track of the same kind with overwrite semantics |
 | `insertGap`, `clearRange` | Building blocks for sync-locked edits |
 
+## Transitions and fades (`timeline/Transitions.h`)
+
+A clip may carry a `transitionIn` and a `transitionOut` (kind **dissolve** or **dip**, a length, and for edit points an **alignment**: centre, start at cut, end at cut).
+- A `transitionIn` on a clip that directly follows another clip is an **edit-point transition**. Before the cut the incoming clip plays from its *head handle* (media before its in point); after the cut the outgoing clip plays from its *tail handle*.
+- Otherwise `transitionIn` fades up from what is below (black or silence), and `transitionOut` fades down at the clip's tail. A tail fade gives way to an edit-point transition owned by the next clip.
+- **Video** mixes the canvas "below + outgoing", "below" and "below + incoming". A dissolve crossfades the two; a dip goes through "below" (black on V1). This is exact over lower tracks. **Audio** uses sample-accurate constant-power gains (cos/sin), and clips play into their handles during edit-point crossfades.
+- **Clamping, not failing:** `transitions::regions` shortens a transition to the available handles and clip lengths, so trimming or moving clips can never make the timeline invalid. The timeline flags shortened transitions with a warning underline. `EditorSession::setTransition` refuses a length the media cannot supply and says how many frames fit. `applyDefaultTransition` (1 s, on the edge nearest the playhead) shrinks to fit. Linked partners get the matching transition in the same undo step.
+- Razor keeps the head transition on the left piece and gives the tail transition to the right piece.
+
 ## Clip transforms and keyframes (`timeline/Animation.h`)
 
 Video clips carry a `ClipTransform` of nine animatable parameters: position X/Y (timeline pixels from centre), scale %, rotation °, opacity %, and crop left/right/top/bottom %. Each is an `AnimatedValue`: a constant, or keyframes with **linear**, **hold** or **ease** (smoothstep) interpolation to the next key, held flat before the first and after the last key.

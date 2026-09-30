@@ -17,6 +17,28 @@ namespace {
 constexpr std::array<const char*, 6> kMarkerColorNames{"red", "orange", "yellow", "green", "blue", "purple"};
 }  // namespace
 
+const char* toString(TransitionKind kind) { return kind == TransitionKind::Dip ? "dip" : "dissolve"; }
+
+const char* toString(TransitionAlignment alignment) {
+    switch (alignment) {
+        case TransitionAlignment::StartAtCut: return "start";
+        case TransitionAlignment::EndAtCut: return "end";
+        case TransitionAlignment::Center: default: return "center";
+    }
+}
+
+std::optional<TransitionKind> transitionKindFromString(const std::string& name) {
+    for (auto k : {TransitionKind::Dissolve, TransitionKind::Dip})
+        if (name == toString(k)) return k;
+    return std::nullopt;
+}
+
+std::optional<TransitionAlignment> transitionAlignmentFromString(const std::string& name) {
+    for (auto a : {TransitionAlignment::Center, TransitionAlignment::StartAtCut, TransitionAlignment::EndAtCut})
+        if (name == toString(a)) return a;
+    return std::nullopt;
+}
+
 const char* toString(MarkerColor color) { return kMarkerColorNames[static_cast<std::size_t>(color)]; }
 
 std::optional<MarkerColor> markerColorFromString(const std::string& name) {
@@ -193,6 +215,8 @@ Status Timeline::validate() const {
             if (c.bounded() && c.sourceOut() > c.sourceLength) return fail("clip " + c.id + " exceeds its media");
             if (i > 0 && t.clips[i - 1].end() > c.start) return fail("clips overlap on track " + t.name);
             if (!checkMarkers(c.markers, false)) return fail("invalid markers on clip " + c.id);
+            if ((c.transitionIn && c.transitionIn->duration <= 0) || (c.transitionOut && c.transitionOut->duration <= 0))
+                return fail("a transition on clip " + c.id + " has no length");
             for (ClipParam p : kAllClipParams) {
                 const AnimatedValue& v = c.transform[p];
                 if (!std::isfinite(v.value)) return fail("non-finite " + std::string(paramInfo(p).id) + " on clip " + c.id);

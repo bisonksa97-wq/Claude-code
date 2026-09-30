@@ -39,8 +39,8 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Transitions and audio fades (finishing the everyday editing toolkit):**
-1. Transition model: a transition sits on an edit point between two adjacent clips (or at a clip's head/tail) with a length and alignment. First kinds: cross dissolve and dip to black for video, constant-power crossfade for audio. Needs format v5 with a migration.
-2. Render support: the compositor blends the outgoing and incoming clips across the transition (this needs handles, i.e. media beyond the cut, with a readable error when there is not enough), and the mixer applies crossfades and clip fade-in/out.
-3. UI: add a default transition at the selected edit (Ctrl+T), drag its edges to change the length, audio fade handles on clips.
-4. Tests: blend weights at each frame, handle validation, audio crossfade power, persistence and migration, and an exported dissolve checked frame by frame.
+**Audio mixing essentials (Phase 4 completion):**
+1. Pan per track and clip, and keyframable clip volume reusing `AnimatedValue` (the fades from session 8 stay as a separate envelope).
+2. A mixer panel with per-track faders, pan, mute/solo, and peak/RMS meters fed from the playback engine (a meter tap in the audio worker, ballistics in the UI).
+3. The first real-time audio processors behind a small `AudioEffect` interface: gain, 3-band EQ (biquads) and a compressor, with a per-track insert chain stored in the project (format v6 with a migration).
+4. Tests: pan law, volume keyframes, biquad responses at known frequencies, compressor gain reduction on synthetic tones, meter values, persistence and migration.

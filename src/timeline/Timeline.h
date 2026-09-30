@@ -32,6 +32,26 @@ struct Marker {
     MarkerColor color = MarkerColor::Blue;
 };
 
+enum class TransitionKind {
+    Dissolve,  // video cross-dissolve / audio constant-power crossfade
+    Dip,       // through black (video) or silence (audio): out fades away, then in fades up
+};
+enum class TransitionAlignment { Center, StartAtCut, EndAtCut };
+
+const char* toString(TransitionKind kind);
+const char* toString(TransitionAlignment alignment);
+std::optional<TransitionKind> transitionKindFromString(const std::string& name);
+std::optional<TransitionAlignment> transitionAlignmentFromString(const std::string& name);
+
+// A transition at one end of a clip. At the head of a clip that directly follows
+// another clip it is an edit-point transition between the two; otherwise it fades
+// from/to what is below (black or silence). See timeline/Transitions.h.
+struct Transition {
+    TransitionKind kind = TransitionKind::Dissolve;
+    FrameIndex duration = 0;
+    TransitionAlignment alignment = TransitionAlignment::Center;  // edit points only
+};
+
 // A clip places a range of a media item on a track.
 //
 // All positions are in frames of the owning timeline's frame rate:
@@ -53,6 +73,8 @@ struct Clip {
     double gainDb = 0.0;  // audio clips only
     std::vector<Marker> markers;  // source-frame positions
     ClipTransform transform;      // video clips only; keyframes in source frames
+    std::optional<Transition> transitionIn;
+    std::optional<Transition> transitionOut;
 
     FrameIndex end() const { return start + duration; }
     // Timeline frame of a source frame of this clip (may fall outside the clip).

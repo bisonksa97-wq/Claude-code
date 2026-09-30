@@ -17,6 +17,7 @@
 #include "app/EditorSession.h"
 #include "app/MediaAssets.h"
 #include "core/Timecode.h"
+#include "timeline/Transitions.h"
 #include "ui/FrameImage.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
@@ -728,6 +729,34 @@ void TimelineView::paintEvent(QPaintEvent*) {
             const QRect r = clipRect(clip.id);
             if (r.right() < m.trackHeaderWidth || r.left() > width()) continue;
             drawClip(p, clip, r, track.kind == TrackKind::Video);
+        }
+        // Transitions and fades: a box over their (effective) range with a ramp showing
+        // the kind — one diagonal for a dissolve, a V for a dip, half-ramps for fades.
+        for (const auto& region : transitions::regions(track)) {
+            const int x0 = xForFrame(region.start);
+            const int x1 = std::max(x0 + 3, xForFrame(region.end));
+            const QRect box(x0, y + m.trackHeight / 2, x1 - x0, m.trackHeight / 2 - 3);
+            QColor fill = t.panel;
+            fill.setAlpha(170);
+            p.fillRect(box, fill);
+            p.setPen(QPen(t.clipText, 1));
+            p.drawRect(box.adjusted(0, 0, -1, -1));
+            if (region.kind == TransitionKind::Dip) {
+                p.drawLine(box.bottomLeft(), QPoint(box.center().x(), box.top()));
+                p.drawLine(QPoint(box.center().x(), box.top()), box.bottomRight());
+            } else if (!region.outgoing) {
+                p.drawLine(box.bottomLeft(), box.topRight());  // fade up
+            } else if (!region.incoming) {
+                p.drawLine(box.topLeft(), box.bottomRight());  // fade down
+            } else {
+                p.drawLine(box.bottomLeft(), box.topRight());
+                p.drawLine(box.topLeft(), box.bottomRight());
+            }
+            if (region.length() < region.requested) {
+                // Shortened by missing media or clip length: flag it.
+                p.setPen(QPen(t.warning, 2));
+                p.drawLine(box.left(), box.bottom(), box.right(), box.bottom());
+            }
         }
         p.setClipping(false);
         drawTrackHeader(p, track, static_cast<int>(row));

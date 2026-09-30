@@ -224,6 +224,10 @@ void MainWindow::buildMenus() {
     add(edit, tr("Paste Insert"), QKeySequence("Ctrl+Shift+V"), [this] { pasteClipboard(ops::EditMode::Insert); });
     add(edit, tr("Duplicate"), QKeySequence("Ctrl+D"), &MainWindow::duplicateSelection);
     edit->addSeparator();
+    add(edit, tr("Apply Cross Dissolve"), QKeySequence("Ctrl+T"), [this] { applyTransition(TransitionKind::Dissolve); });
+    add(edit, tr("Apply Dip to Black"), QKeySequence("Ctrl+Shift+T"), [this] { applyTransition(TransitionKind::Dip); });
+    add(edit, tr("Remove Transitions"), QKeySequence(), &MainWindow::removeTransitions);
+    edit->addSeparator();
     add(edit, tr("Select All"), QKeySequence::SelectAll, [this] {
         std::vector<std::string> all;
         for (const auto& t : session_->timeline().tracks)
@@ -752,6 +756,43 @@ void MainWindow::editMarker(const QString& markerId) {
     const int outcome = dialog.exec();
     if (outcome == MarkerDialog::Saved) runEdit([&] { return session_->updateMarker(dialog.marker()); });
     else if (outcome == MarkerDialog::DeleteRequested) runEdit([&] { return session_->removeMarker(markerId.toStdString()); });
+}
+
+void MainWindow::applyTransition(TransitionKind kind) {
+    const auto clips = selectedClips();
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select a clip; the transition goes on its edge nearest the playhead."), 4000);
+        return;
+    }
+    Transaction tx(session_->history(), kind == TransitionKind::Dip ? "Apply Dip to Black" : "Apply Cross Dissolve");
+    FrameIndex applied = 0;
+    for (const auto& id : clips) {
+        auto r = session_->applyDefaultTransition(id, viewer_->position(), kind);
+        if (!r.ok()) {
+            showError(tr("The transition could not be added."), qs(r.error().toString()));
+            return;  // the transaction rolls back
+        }
+        applied = r.value();
+    }
+    tx.commit();
+    const double fps = session_->timeline().frameRate.toDouble();
+    statusBar()->showMessage(tr("Transition of %1 frames (%2 s)").arg(applied).arg(static_cast<double>(applied) / fps, 0, 'f', 2), 4000);
+}
+
+void MainWindow::removeTransitions() {
+    const auto clips = selectedClips();
+    if (clips.empty()) return;
+    Transaction tx(session_->history(), "Remove Transitions");
+    for (const auto& id : clips) {
+        for (ops::Edge edge : {ops::Edge::In, ops::Edge::Out}) {
+            Status s = session_->setTransition(id, edge, std::nullopt);
+            if (!s.ok()) {
+                showError(tr("The transitions could not be removed."), qs(s.error().toString()));
+                return;
+            }
+        }
+    }
+    tx.commit();
 }
 
 }  // namespace up::ui

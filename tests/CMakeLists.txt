@@ -18,6 +18,7 @@ up_add_test(unit_tests
     unit/CommandStackTest.cpp
     unit/ThreePointEditTest.cpp
     unit/TimelineOpsTest.cpp
+    unit/TransitionsTest.cpp
     unit/ProjectFormatTest.cpp)
 
 up_add_test(integration_tests

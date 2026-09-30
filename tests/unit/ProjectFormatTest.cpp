@@ -225,6 +225,30 @@ TEST(ProjectFormat, MigratesVersion3Documents) {
     EXPECT_TRUE(p.value().timelines[0].tracks[0].clips[0].transform.isIdentity());
 }
 
+TEST(ProjectFormat, RoundTripsTransitionsAndMigratesV4) {
+    Project p = sampleProject();
+    Clip& c = p.timelines[0].tracks[0].clips[0];
+    c.transitionIn = Transition{TransitionKind::Dip, 12, TransitionAlignment::StartAtCut};
+    auto q = ProjectSerializer::fromJson(ProjectSerializer::toJson(p));
+    ASSERT_TRUE(q.ok()) << q.error().toString();
+    const Clip& qc = q.value().timelines[0].tracks[0].clips[0];
+    ASSERT_TRUE(qc.transitionIn.has_value());
+    EXPECT_EQ(qc.transitionIn->kind, TransitionKind::Dip);
+    EXPECT_EQ(qc.transitionIn->duration, 12);
+    EXPECT_EQ(qc.transitionIn->alignment, TransitionAlignment::StartAtCut);
+    EXPECT_FALSE(qc.transitionOut.has_value());
+
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["formatVersion"] = 4;
+    for (auto& clip : doc["timelines"][0]["tracks"][0]["clips"]) {
+        clip.erase("transitionIn");
+        clip.erase("transitionOut");
+    }
+    auto migrated = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(migrated.ok()) << migrated.error().toString();
+    EXPECT_FALSE(migrated.value().timelines[0].tracks[0].clips[0].transitionIn.has_value());
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

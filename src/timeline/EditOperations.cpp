@@ -47,8 +47,11 @@ std::size_t indexOf(const Track& track, const std::string& clipId) {
     return track.clips.size();
 }
 
-// After splitting `left` at right.sourceIn, gives each piece the clip markers on its side.
-void partitionMarkers(Clip& left, Clip& right) {
+// After splitting `left` at right.sourceIn, gives each piece the clip markers on its side,
+// the head transition to the left piece and the tail transition to the right piece.
+void splitClipState(Clip& left, Clip& right) {
+    right.transitionIn.reset();
+    left.transitionOut.reset();
     std::vector<Marker> all = std::move(left.markers);
     left.markers.clear();
     right.markers.clear();
@@ -67,7 +70,7 @@ void splitAt(Track& track, FrameIndex frame) {
             right.sourceIn += frame - c.start;
             right.duration = c.end() - frame;
             c.duration = frame - c.start;
-            partitionMarkers(c, right);
+            splitClipState(c, right);
             track.clips.insert(track.clips.begin() + static_cast<std::ptrdiff_t>(i + 1), std::move(right));
             return;
         }
@@ -170,7 +173,7 @@ Result<std::string> razor(Timeline& timeline, const std::string& clipId, FrameIn
         right.sourceIn += frame - c.start;
         right.duration = c.end() - frame;
         c.duration = frame - c.start;
-        partitionMarkers(c, right);
+        splitClipState(c, right);
         const std::string id = right.id;
         track.clips.insert(track.clips.begin() + static_cast<std::ptrdiff_t>(i + 1), std::move(right));
         return id;
