@@ -98,6 +98,29 @@ TEST_F(CodecTest, DecodePastEndHoldsLastFrameAndScales) {
     EXPECT_EQ(frameNumberOf(frame.value()), 63);
 }
 
+// Regression: swscale's SIMD code overruns rows that are not a multiple of 64 bytes.
+// Converting through padded scratch memory must keep arbitrary sizes safe.
+TEST_F(CodecTest, ConvertsToAndFromAwkwardSizes) {
+    auto dec = VideoDecoder::open(*dir / "ramp.mp4");
+    ASSERT_TRUE(dec.ok());
+    for (auto [w, h] : {std::pair{120, 120}, {118, 77}, {33, 17}, {2, 2}, {250, 3}}) {
+        for (int f : {5, 6, 40}) {
+            auto frame = dec.value()->frameAt(f / 25.0 + 0.001, w, h);
+            ASSERT_TRUE(frame.ok());
+            EXPECT_EQ(frame.value().width, w);
+            EXPECT_EQ(frame.value().pixels.size(), static_cast<std::size_t>(w) * h * 4);
+            EXPECT_NEAR(test::averageColor(frame.value()).g, f * 4, 6) << w << "x" << h;  // extreme downscales blur a little
+        }
+    }
+    media::SyntheticSpec spec = test::solid(10, 200, 10, 5);
+    spec.width = 122;  // 488-byte RGBA rows
+    spec.height = 78;
+    test::makeMedia(*dir / "odd.mp4", spec);
+    auto info = probeMedia(*dir / "odd.mp4");
+    ASSERT_TRUE(info.ok());
+    EXPECT_EQ(info.value().width, 122);
+}
+
 TEST_F(CodecTest, AudioDecodeReproducesTone) {
     auto dec = AudioDecoder::open(*dir / "ramp.mp4", 48000, 2);
     ASSERT_TRUE(dec.ok());

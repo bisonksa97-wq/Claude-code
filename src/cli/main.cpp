@@ -167,6 +167,13 @@ Three-point editing (out marks are exclusive; omit an option to clear that mark)
   duplicate <project> <clip>              copy a clip (with linked partners) right after itself
   delete <project> <clip...> [--ripple]   remove several clips (and partners) in one step
 
+Transforms (params: positionX positionY scale rotation opacity cropLeft cropRight cropTop cropBottom)
+  param <project> <clip> list
+  param <project> <clip> set <param> <value> [--at <pos>] [--key]   --key adds a keyframe at --at
+  param <project> <clip> unkey <param> --at <pos>
+  param <project> <clip> interp <param> linear|hold|ease --at <pos>
+  param <project> <clip> reset <param>
+
 Tracks
   track <project> add video|audio [--name N]
   track <project> remove <track> [--force]      --force also deletes the track's clips
@@ -204,7 +211,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string command = argv[1];
-    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose", "force"});
+    const cli::Args args(argc, argv, 2, {"insert", "ripple", "no-audio", "verbose", "force", "key"});
     log::setDefaultLevel(args.flag("verbose") ? log::Level::Debug : log::Level::Warning);
     if (!args.unknown().empty()) return usageError("option " + args.unknown().front() + " needs a value");
     const auto& pos = args.positional();
@@ -439,6 +446,54 @@ int main(int argc, char** argv) {
         Status st = a.flag("ripple") ? s.value()->rippleDeleteClips(clips) : s.value()->liftClips(clips);
         if (!st.ok()) return fail(st.error());
         return saveAndReport(*s.value(), "Deleted " + std::to_string(clips.size()) + " clip(s) and their partners");
+    }};
+
+    commands["param"] = {3, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        auto clip = resolveClip(session.timeline(), pos[1]);
+        if (!clip.ok()) return fail(clip.error());
+        const Clip& c = *session.timeline().clip(clip.value());
+        const std::string& action = pos[2];
+        const FrameRate rate = session.timeline().frameRate;
+        if (action == "list") {
+            for (ClipParam p : kAllClipParams) {
+                const AnimatedValue& v = c.transform[p];
+                std::cout << paramInfo(p).id << " = " << v.value << paramInfo(p).unit;
+                for (const auto& k : v.keys)
+                    std::cout << "  [" << formatTimecode(c.toTimeline(k.frame), rate) << ": " << k.value << " " << toString(k.interpolation) << "]";
+                std::cout << "\n";
+            }
+            return 0;
+        }
+        if (pos.size() < 4) return usageError("param " + action + " needs a parameter name");
+        const auto param = clipParamFromString(pos[3]);
+        if (!param) return usageError("unknown parameter '" + pos[3] + "'");
+        const auto at = parseFrame(a.option("at").value_or(std::to_string(c.start)), rate);
+        if (!at) return usageError("invalid --at");
+        Status st = Status::success();
+        if (action == "set") {
+            if (pos.size() < 5) return usageError("param set needs a value");
+            char* end = nullptr;
+            const double value = std::strtod(pos[4].c_str(), &end);
+            if (end == pos[4].c_str() || *end != '\0') return usageError("invalid value " + pos[4]);
+            if (a.flag("key")) st = session.setKeyframe(clip.value(), *param, *at, true);
+            if (st.ok()) st = session.setClipParameter(clip.value(), *param, value, *at);
+        } else if (action == "unkey") {
+            st = session.setKeyframe(clip.value(), *param, *at, false);
+        } else if (action == "interp") {
+            if (pos.size() < 5) return usageError("param interp needs linear, hold or ease");
+            const auto interpolation = interpolationFromString(pos[4]);
+            if (!interpolation) return usageError("interpolation must be linear, hold or ease");
+            st = session.setKeyframeInterpolation(clip.value(), *param, *at, *interpolation);
+        } else if (action == "reset") {
+            st = session.resetClipParameter(clip.value(), *param);
+        } else {
+            return usageError("param actions are list, set, unkey, interp and reset");
+        }
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(session, "Updated " + std::string(paramInfo(*param).id));
     }};
 
     commands["track"] = {3, [&](const cli::Args& a) {

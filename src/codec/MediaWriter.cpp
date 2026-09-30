@@ -1,6 +1,7 @@
 #include "codec/MediaWriter.h"
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 extern "C" {
@@ -36,6 +37,7 @@ struct MediaWriter::Impl {
     ffmpeg::FramePtr audioFrame{av_frame_alloc()};
     ffmpeg::PacketPtr packet{av_packet_alloc()};
     SwsContext* sws = nullptr;
+    std::vector<uint8_t> scratch;  // padded RGBA copy for swscale
     int64_t videoPts = 0;
     int64_t audioPts = 0;
     std::vector<float> audioFifo;  // interleaved samples waiting for a full encoder frame
@@ -220,8 +222,13 @@ Status MediaWriter::writeVideo(const VideoFrame& frame) {
     if (err < 0) return m.encodeError("the frame buffer is busy", err);
     m.sws = sws_getCachedContext(m.sws, frame.width, frame.height, AV_PIX_FMT_RGBA, frame.width, frame.height,
                                  AV_PIX_FMT_YUV420P, SWS_BICUBIC, nullptr, nullptr, nullptr);
-    const uint8_t* src[4] = {frame.pixels.data(), nullptr, nullptr, nullptr};
-    const int srcStride[4] = {frame.width * 4, 0, 0, 0};
+    // Read from padded scratch memory: swscale may read past the end of a tightly packed row.
+    const int stride = ffmpeg::alignedStride(frame.width * 4);
+    m.scratch.resize(static_cast<std::size_t>(stride) * frame.height + ffmpeg::kSwsAlign);
+    for (int y = 0; y < frame.height; ++y)
+        std::memcpy(m.scratch.data() + static_cast<std::size_t>(y) * stride, frame.row(y), static_cast<std::size_t>(frame.width) * 4);
+    const uint8_t* src[4] = {m.scratch.data(), nullptr, nullptr, nullptr};
+    const int srcStride[4] = {stride, 0, 0, 0};
     sws_scale(m.sws, src, srcStride, 0, frame.height, m.videoFrame->data, m.videoFrame->linesize);
     m.videoFrame->pts = m.videoPts++;
     return m.send(m.video.get(), m.videoStream, m.videoFrame.get());

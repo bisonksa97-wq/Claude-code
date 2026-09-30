@@ -118,6 +118,19 @@ public:
     Status moveClip(const std::string& clipId, const std::string& trackId, FrameIndex newStart);
     Status setTrackState(const std::string& trackId, const TrackState& state);
 
+    // --- Clip transforms and keyframes ------------------------------------------------------
+    // (video clips only; `timelineFrame` must lie inside the clip for keyframe operations)
+    // Sets a parameter at `timelineFrame`: an animated parameter gets (or updates) the
+    // keyframe at that frame; a constant parameter changes its value. Values are clamped.
+    Status setClipParameter(const std::string& clipId, ClipParam param, double value, FrameIndex timelineFrame);
+    // Adds a keyframe holding the current value at the frame, or removes the one there.
+    // Removing the last keyframe keeps its value as the constant, so nothing jumps.
+    Status setKeyframe(const std::string& clipId, ClipParam param, FrameIndex timelineFrame, bool present);
+    Status setKeyframeInterpolation(const std::string& clipId, ClipParam param, FrameIndex timelineFrame,
+                                    Interpolation interpolation);
+    // Back to the default value with no keyframes.
+    Status resetClipParameter(const std::string& clipId, ClipParam param);
+
     // --- Tracks ------------------------------------------------------------------------
     // Adds a track above the others of its kind. Returns its id.
     Result<std::string> addTrack(TrackKind kind, std::string name = {});

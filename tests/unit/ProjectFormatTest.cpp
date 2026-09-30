@@ -196,6 +196,35 @@ TEST(ProjectFormat, MigratesVersion2Documents) {
     EXPECT_EQ(p.value().media[0].markIn, 1.0);
 }
 
+TEST(ProjectFormat, RoundTripsTransformsAndOmitsDefaults) {
+    Project p = sampleProject();
+    Clip& c = p.timelines[0].tracks[0].clips[0];
+    c.transform[ClipParam::Scale].value = 50;
+    c.transform[ClipParam::Opacity].setKey(5, 0, Interpolation::EaseInOut);
+    c.transform[ClipParam::Opacity].setKey(30, 100);
+    const std::string text = ProjectSerializer::toJson(p);
+    auto doc = nlohmann::json::parse(text);
+    const auto& tj = doc["timelines"][0]["tracks"][0]["clips"][0]["transform"];
+    EXPECT_TRUE(tj.contains("scale"));
+    EXPECT_FALSE(tj.contains("rotation"));  // defaults are not written
+    auto q = ProjectSerializer::fromJson(text);
+    ASSERT_TRUE(q.ok()) << q.error().toString();
+    const ClipTransform& t = q.value().timelines[0].tracks[0].clips[0].transform;
+    EXPECT_EQ(t[ClipParam::Scale].value, 50);
+    ASSERT_EQ(t[ClipParam::Opacity].keys.size(), 2u);
+    EXPECT_EQ(t[ClipParam::Opacity].keys[0].interpolation, Interpolation::EaseInOut);
+    EXPECT_EQ(t[ClipParam::Rotation].value, 0);
+}
+
+TEST(ProjectFormat, MigratesVersion3Documents) {
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["formatVersion"] = 3;
+    for (auto& clip : doc["timelines"][0]["tracks"][0]["clips"]) clip.erase("transform");
+    auto p = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(p.ok()) << p.error().toString();
+    EXPECT_TRUE(p.value().timelines[0].tracks[0].clips[0].transform.isIdentity());
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

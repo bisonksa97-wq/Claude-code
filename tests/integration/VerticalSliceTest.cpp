@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -176,3 +177,50 @@ TEST(VerticalSlice, CompositorLetterboxesMismatchedAspect) {
     EXPECT_LT(f.row(90)[0], 10);                                  // left pillar is black
     EXPECT_GT(f.row(90)[static_cast<std::size_t>(160 * 4)], 230);  // centre shows the source
 }
+
+// Golden-value compositing through the real decoder: all video tracks are blended.
+TEST(VerticalSlice, CompositorBlendsTracksWithTransforms) {
+    test::TempDir dir;
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 25));
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 25));
+    auto session = EditorSession::createNew("Layers", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+    const auto ids = session->importMedia({dir / "blue.mp4", dir / "red.mp4"}).importedIds;
+    const auto video = session->timeline().trackIdsOfKind(TrackKind::Video);
+    ASSERT_TRUE(session->placeMedia(ids[0], 0, ops::EditMode::Overwrite, video[0]).ok());  // blue on V1
+    ASSERT_TRUE(session->placeMedia(ids[1], 0, ops::EditMode::Overwrite, video[1]).ok());  // red on V2
+    Timeline& tl = session->timeline();
+    Clip& red = tl.tracks[1].clips.at(0);
+    render::FrameCompositor compositor(render::resolverFor(session->project()));
+    auto at = [&](FrameIndex f, int x, int y) {
+        auto frame = compositor.render(tl, f);
+        EXPECT_TRUE(frame.ok());
+        const uint8_t* p = frame.value().row(y) + x * 4;
+        return std::array<int, 3>{p[0], p[1], p[2]};
+    };
+    // Opaque full-frame V2 hides V1.
+    EXPECT_GT(at(5, 80, 60)[0], 200);
+
+    // Half-size V2 in the top-left quadrant: V1 shows around it.
+    red.transform[ClipParam::Scale].value = 50;
+    red.transform[ClipParam::PositionX].value = -40;
+    red.transform[ClipParam::PositionY].value = -30;
+    EXPECT_GT(at(5, 40, 30)[0], 200);   // centre of the red quadrant
+    EXPECT_GT(at(5, 120, 90)[2], 200);  // blue elsewhere
+
+    // Opacity fade keyframed from 0 at source frame 0 to 100 at frame 20.
+    red.transform = ClipTransform{};
+    red.transform[ClipParam::Opacity].setKey(0, 0);
+    red.transform[ClipParam::Opacity].setKey(20, 100);
+    const auto start = at(0, 80, 60);
+    const auto mid = at(10, 80, 60);
+    const auto end = at(20, 80, 60);
+    EXPECT_GT(start[2], 200);               // fully blue
+    EXPECT_NEAR(mid[0], (220 + 20) / 2, 12); // half way
+    EXPECT_NEAR(mid[2], (220 + 20) / 2, 12);
+    EXPECT_GT(end[0], 200);                 // fully red
+
+    // Disabling V2 or making it transparent reveals V1 again.
+    tl.tracks[1].enabled = false;
+    EXPECT_GT(at(20, 80, 60)[2], 200);
+}
+

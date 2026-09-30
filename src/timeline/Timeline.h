@@ -6,6 +6,7 @@
 
 #include "core/Rational.h"
 #include "core/Result.h"
+#include "timeline/Animation.h"
 
 namespace up {
 
@@ -51,6 +52,7 @@ struct Clip {
     bool enabled = true;
     double gainDb = 0.0;  // audio clips only
     std::vector<Marker> markers;  // source-frame positions
+    ClipTransform transform;      // video clips only; keyframes in source frames
 
     FrameIndex end() const { return start + duration; }
     // Timeline frame of a source frame of this clip (may fall outside the clip).

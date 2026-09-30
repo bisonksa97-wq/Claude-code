@@ -633,6 +633,24 @@ void TimelineView::drawClip(QPainter& p, const Clip& clip, const QRect& r, bool 
         const QRect textRect(labelLeft, r.top() + 3, r.right() - labelLeft - 3, r.height() - 6);
         p.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, p.fontMetrics().elidedText(label, Qt::ElideRight, textRect.width()));
     }
+    // Keyframes (any animated parameter) as small diamonds along the bottom edge.
+    if (isVideo) {
+        std::vector<FrameIndex> keyFrames;
+        for (ClipParam param : kAllClipParams)
+            for (const auto& k : clip.transform[param].keys) keyFrames.push_back(k.frame);
+        std::sort(keyFrames.begin(), keyFrames.end());
+        keyFrames.erase(std::unique(keyFrames.begin(), keyFrames.end()), keyFrames.end());
+        const int y = r.bottom() - 5;
+        p.setPen(Qt::NoPen);
+        p.setBrush(t.clipText);
+        for (FrameIndex source : keyFrames) {
+            const FrameIndex f = clip.toTimeline(source);
+            if (!clip.contains(f)) continue;
+            const int x = xForFrame(f);
+            p.drawPolygon(QPolygon({QPoint(x, y - 4), QPoint(x + 4, y), QPoint(x, y + 4), QPoint(x - 4, y)}));
+        }
+        p.setBrush(Qt::NoBrush);
+    }
     // Clip markers: a coloured tick at the top of the clip where each marked picture is.
     for (const auto& marker : clip.markers) {
         const FrameIndex f = clip.toTimeline(marker.frame);

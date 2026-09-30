@@ -24,8 +24,9 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ✅ CPU decode/compose/encode reference pipeline, aspect-correct fit
 - ✅ Background frame prefetch during playback, synced to the master clock (session 2)
 - ☐ Playback frame cache and a render cache that survive edits (§57)
-- ☐ Transform/crop/opacity with blending (tracks composited, not just top-most)
-- ☐ Keyframes (§30) as a shared parameter system
+- ✅ Transform/crop/opacity with multi-track blending (session 7)
+- ✅ Keyframes (§30): linear/hold/ease, stored in source frames (session 7)
+- ☐ Graph/curve editor, custom Bézier curves, expressions
 - ☐ GPU abstraction (§56) with the CPU path kept as the golden reference
 
 ## Phase 4: Audio ◐
@@ -38,8 +39,8 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Phase 3: transforms, opacity and compositing.** Until now only the top clip is shown and nothing is animatable:
-1. A parameter model for clip properties (position, scale, rotation, anchor, crop, opacity), with keyframes and interpolation (linear, hold, ease). This becomes the shared animation system of §30, stored in the project (format v4 with a migration).
-2. A compositor that blends all enabled video tracks bottom-to-top with straight-alpha "over", applying each clip's transform and opacity. It is CPU-only at first, with golden-image tests.
-3. An inspector panel to edit the properties at the playhead (adds or updates keyframes, undoable).
-4. Tests: interpolation maths, transform and composite pixels on synthetic frames, keyframe persistence, and export of an animated opacity fade.
+**Transitions and audio fades (finishing the everyday editing toolkit):**
+1. Transition model: a transition sits on an edit point between two adjacent clips (or at a clip's head/tail) with a length and alignment. First kinds: cross dissolve and dip to black for video, constant-power crossfade for audio. Needs format v5 with a migration.
+2. Render support: the compositor blends the outgoing and incoming clips across the transition (this needs handles, i.e. media beyond the cut, with a readable error when there is not enough), and the mixer applies crossfades and clip fade-in/out.
+3. UI: add a default transition at the selected edit (Ctrl+T), drag its edges to change the length, audio fade handles on clips.
+4. Tests: blend weights at each frame, handle validation, audio crossfade power, persistence and migration, and an exported dissolve checked frame by frame.

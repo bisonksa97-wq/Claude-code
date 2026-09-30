@@ -1,11 +1,11 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **3**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **4**, `Project::kFormatVersion`).
 
 ```jsonc
 {
   "format": "ultimatepost.project",
-  "formatVersion": 3,
+  "formatVersion": 4,
   "project": {
     "id": "…", "name": "…", "createdAt": "2026-09-29T17:40:00Z", "modifiedAt": "…",
     "settings": { "frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000 },
@@ -36,7 +36,12 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
           "clips": [ { "id": "…", "mediaId": "…", "name": "…",
                        "start": 0, "duration": 50, "sourceIn": 0, "sourceLength": 50,
                        "linkId": "…", "enabled": true, "gainDb": 0,
-                       "markers": [ … ] } ]                   // clip markers: source frames
+                       "markers": [ … ],                      // clip markers: source frames
+                       "transform": {                          // only non-default parameters
+                         "scale": { "value": 50, "keys": [] },
+                         "opacity": { "value": 100, "keys": [
+                           { "frame": 0, "value": 0, "interpolation": "ease" },
+                           { "frame": 40, "value": 100, "interpolation": "linear" } ] } } } ]
       } ]
   } ]
 }
@@ -62,6 +67,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 |---|---|---|
 | 1 | First format | – |
 | 2 | Timeline `markIn`/`markOut` and `targets`; media `markIn`/`markOut` | Targets become the first video and first audio track (how v1 placed media); all marks are null. Covered by `ProjectFormat.MigratesVersion1Documents`. |
+| 4 | Clip `transform` (animatable position, scale, rotation, opacity, crop) | Empty transform (identity) on every clip. Covered by `ProjectFormat.MigratesVersion3Documents`. |
 | 3 | Timeline and clip `markers` | Empty marker lists everywhere. Covered by `ProjectFormat.MigratesVersion2Documents` (and v1 files migrate through both steps). |
 
 ## Safety

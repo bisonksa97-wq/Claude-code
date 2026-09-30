@@ -22,6 +22,7 @@ class Project;
 
 namespace up::ui {
 
+class InspectorPanel;
 class MediaPoolPanel;
 class TimelinePanel;
 class TimelineView;
@@ -38,6 +39,7 @@ public:
 
     EditorSession* session() const { return session_.get(); }
     MediaPoolPanel* mediaPool() const { return mediaPool_; }
+    InspectorPanel* inspector() const { return inspector_; }
     ViewerPanel* viewer() const { return viewer_; }  // program monitor
     ViewerPanel* sourceViewer() const { return sourceViewer_; }
     ViewerPanel* activeViewer() const { return activeViewer_; }
@@ -101,6 +103,7 @@ private:
     std::unique_ptr<MediaAssets> assets_;
     QTimer* assetRefresh_ = nullptr;
     MediaPoolPanel* mediaPool_ = nullptr;
+    InspectorPanel* inspector_ = nullptr;
     ViewerPanel* viewer_ = nullptr;
     ViewerPanel* sourceViewer_ = nullptr;
     ViewerPanel* activeViewer_ = nullptr;

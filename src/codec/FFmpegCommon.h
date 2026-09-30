@@ -41,4 +41,10 @@ using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
 // Makes FFmpeg's own logging quiet unless explicitly enabled.
 void initialize();
 
+// swscale's SIMD paths read and write whole vector blocks, so a row may be touched
+// past its last pixel. Buffers handed to sws_scale therefore use strides aligned to
+// this many bytes plus the same amount of trailing slack.
+inline constexpr int kSwsAlign = 64;
+inline int alignedStride(int bytes) { return (bytes + kSwsAlign - 1) / kSwsAlign * kSwsAlign; }
+
 }  // namespace up::ffmpeg

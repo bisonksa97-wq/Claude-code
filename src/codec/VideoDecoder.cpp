@@ -1,6 +1,8 @@
 #include "codec/VideoDecoder.h"
 
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 extern "C" {
 #include <libswscale/swscale.h>
@@ -26,6 +28,7 @@ struct VideoDecoder::Impl {
     AVRational timeBase{1, 1};
     int64_t startPts = 0;
     SwsContext* sws = nullptr;
+    std::vector<uint8_t> scratch;  // padded conversion target
 
     // Decode forward beyond this many seconds triggers a seek instead.
     static constexpr double kForwardDecodeLimit = 2.0;
@@ -139,10 +142,16 @@ struct VideoDecoder::Impl {
             return makeError(ErrorCode::DecodeError, "codec", "Unable to convert the decoded frame to RGB.",
                              "The pixel format may be unsupported.");
         }
-        VideoFrame out(outW, outH);
-        uint8_t* dst[4] = {out.pixels.data(), nullptr, nullptr, nullptr};
-        int dstStride[4] = {outW * 4, 0, 0, 0};
+        // Convert into padded scratch memory (see ffmpeg::alignedStride), then copy the
+        // tightly packed rows out, so the returned frame never has to absorb SIMD overshoot.
+        const int stride = ffmpeg::alignedStride(outW * 4);
+        scratch.resize(static_cast<std::size_t>(stride) * outH + ffmpeg::kSwsAlign);
+        uint8_t* dst[4] = {scratch.data(), nullptr, nullptr, nullptr};
+        int dstStride[4] = {stride, 0, 0, 0};
         sws_scale(sws, src->data, src->linesize, 0, src->height, dst, dstStride);
+        VideoFrame out(outW, outH);
+        for (int y = 0; y < outH; ++y)
+            std::memcpy(out.row(y), scratch.data() + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(outW) * 4);
         return out;
     }
 };

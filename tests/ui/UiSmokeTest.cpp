@@ -15,6 +15,10 @@
 #include "playback/AudioOutput.h"
 #include "support/TestSupport.h"
 #include "ui/MainWindow.h"
+#include <QDoubleSpinBox>
+#include <QToolButton>
+
+#include "ui/InspectorPanel.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
@@ -416,6 +420,61 @@ TEST(Ui, MultiSelectionMarqueeAndTracks) {
     ASSERT_TRUE(window.session()->addTrack(TrackKind::Video).ok());
     EXPECT_GT(tv->minimumHeight(), before);
     EXPECT_EQ(tv->rowTrackIds().size(), 5u);
+}
+
+TEST(Ui, InspectorEditsTransformsAndKeyframes) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 50));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 850);
+    auto session = EditorSession::createNew("Insp", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    const std::string video = tl.tracks[0].clips[0].id;
+    ui::InspectorPanel* inspector = window.inspector();
+
+    // Selecting the audio half of the linked pair edits the video clip.
+    window.timeline()->selectClip(QString::fromStdString(tl.tracks[2].clips[0].id));
+    EXPECT_EQ(inspector->clipId(), video);
+
+    // Scale to 50%: the program monitor shows black around a smaller picture.
+    window.viewer()->setPosition(5);
+    inspector->valueEditor(ClipParam::Scale)->setValue(50);
+    EXPECT_EQ(tl.clip(video)->transform[ClipParam::Scale].value, 50);
+    QApplication::processEvents();
+    const QImage img = window.viewer()->currentImage();
+    EXPECT_LT(img.pixelColor(3, 3).red(), 20);
+    EXPECT_GT(img.pixelColor(img.width() / 2, img.height() / 2).red(), 180);
+
+    // Keyframe an opacity fade: key at 10 (100%), then 0% at 30 adds a second key.
+    window.viewer()->setPosition(10);
+    inspector->keyframeToggle(ClipParam::Opacity)->click();
+    window.viewer()->setPosition(30);
+    inspector->valueEditor(ClipParam::Opacity)->setValue(0);
+    const auto& keys = tl.clip(video)->transform[ClipParam::Opacity].keys;
+    ASSERT_EQ(keys.size(), 2u);
+    EXPECT_TRUE(inspector->keyframeToggle(ClipParam::Opacity)->isChecked());
+    window.viewer()->setPosition(20);
+    EXPECT_NEAR(inspector->valueEditor(ClipParam::Opacity)->value(), 50, 0.1);
+    EXPECT_FALSE(inspector->keyframeToggle(ClipParam::Opacity)->isChecked());
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_INSPECTOR")) {
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+
+    // Undo through the menu removes the second key.
+    QAction* undo = nullptr;
+    for (QAction* a : window.findChildren<QAction*>())
+        if (a->text().startsWith("&Undo")) undo = a;
+    ASSERT_NE(undo, nullptr);
+    undo->trigger();
+    EXPECT_EQ(tl.clip(video)->transform[ClipParam::Opacity].keys.size(), 1u);
 }
 
 TEST(Ui, ThemesUseCentralTokens) {

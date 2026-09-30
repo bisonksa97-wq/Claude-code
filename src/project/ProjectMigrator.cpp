@@ -42,6 +42,13 @@ const ProjectMigrator& ProjectMigrator::standard() {
             }
             return Status::success();
         });
+        // v3 -> v4: clips gain an animatable transform; existing clips keep the identity.
+        m.addStep(3, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"])
+                for (auto& tr : tl["tracks"])
+                    for (auto& clip : tr["clips"]) clip["transform"] = nlohmann::json::object();
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

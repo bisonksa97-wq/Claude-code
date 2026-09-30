@@ -9,7 +9,8 @@ Timeline ─► FrameCompositor ─► VideoFrame (RGBA8) ─┐
 
 - **VideoDecoder**: frame-accurate random access. Returns the last frame whose PTS ≤ t. Decodes forward for small jumps (< 2 s), otherwise seeks to the previous keyframe. Holds the last frame past EOF. Scales and converts with swscale.
 - **AudioDecoder**: converts any input to interleaved float at the requested rate/channels (swresample). It streams sequential reads, and seeks with a 100 ms pre-roll so transform codecs (AAC) have their overlap frame. Reads outside the media return silence.
-- **FrameCompositor**: the top-most enabled video track with a clip at the frame wins. It fits the source aspect-correct onto a black canvas. Offline media renders in the offline colour (`kOfflineColor`) so problems are visible. It samples 1/8 frame into the display interval to avoid rounding onto the previous frame.
+- **FrameCompositor**: composites every enabled video track bottom (V1) to top over black. Each clip is fitted to the timeline frame (aspect preserved), then its transform, evaluated at the frame's *source* position, applies scale, rotation (clockwise about the centre), position (timeline pixels from the centre), crop (percent per edge) and opacity. Blending is straight-alpha "over". Layers below a fully opaque, frame-covering layer are skipped. Sources are decoded no larger than needed and never above native size; upscaling happens in compositing. Offline media is drawn as a layer of the offline colour (`kOfflineColor`) with the same transform. Decoding samples 1/8 frame into the display interval to avoid rounding onto the previous frame.
+- **compositeOver** (`render/Compositing.h`): the pure blending function. Unrotated 1:1 layers use a row-copy fast path (position rounded to whole pixels); everything else is inverse-mapped with bilinear sampling. It is tested on synthetic images for offset, opacity, scale, crop, rotation and clipping.
 - **AudioMixer**: sums audio tracks with track and clip gain (dB), honouring enable, mute and solo. Clip ranges are mapped to exact sample positions.
 - **DecoderPool**: LRU of decoders keyed by clip, so two clips from one file don't thrash a single decoder.
 - **MediaWriter**: H.264 (libx264, or a platform encoder) or MPEG-4 fallback, YUV 4:2:0, CRF or bitrate. AAC audio is fed in encoder-sized frames; the final partial frame is padded. The container is chosen by file extension.
@@ -43,7 +44,8 @@ For identical inputs and settings, compositing and mixing are deterministic. Enc
 ## Known limitations
 
 - 8-bit RGBA, no colour management (Rec.709 assumed by swscale defaults).
-- No blending, transforms, transitions or effects.
+- CPU compositing only. There are no blend modes besides "over", no anchor point or motion blur, and no transitions or effects yet.
+- **swscale buffers**: its SIMD paths read and write past the end of rows that are not a multiple of 64 bytes. All conversions therefore go through padded, 64-byte-aligned scratch memory (`ffmpeg::alignedStride`). This fixed heap corruption at preview widths such as 120 px; the regression test `CodecTest.ConvertsToAndFromAwkwardSizes` is clean under valgrind.
 - While **stopped**, the frame at the playhead is rendered on the UI thread. During playback, rendering happens on the engine's worker thread.
 - Playback is CPU-only: one video worker, no GPU and no frame cache, so heavy timelines drop frames rather than stutter.
 - Still images: supported by the model (unbounded clips) but not yet covered by tests.

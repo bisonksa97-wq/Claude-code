@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <set>
 
 #include "core/Id.h"
@@ -192,6 +193,14 @@ Status Timeline::validate() const {
             if (c.bounded() && c.sourceOut() > c.sourceLength) return fail("clip " + c.id + " exceeds its media");
             if (i > 0 && t.clips[i - 1].end() > c.start) return fail("clips overlap on track " + t.name);
             if (!checkMarkers(c.markers, false)) return fail("invalid markers on clip " + c.id);
+            for (ClipParam p : kAllClipParams) {
+                const AnimatedValue& v = c.transform[p];
+                if (!std::isfinite(v.value)) return fail("non-finite " + std::string(paramInfo(p).id) + " on clip " + c.id);
+                for (std::size_t k = 0; k < v.keys.size(); ++k) {
+                    if (!std::isfinite(v.keys[k].value) || (k > 0 && v.keys[k - 1].frame >= v.keys[k].frame))
+                        return fail("invalid keyframes for " + std::string(paramInfo(p).id) + " on clip " + c.id);
+                }
+            }
         }
     }
     return Status::success();

@@ -12,6 +12,7 @@ function(up_add_test name)
 endfunction()
 
 up_add_test(unit_tests
+    unit/AnimationCompositingTest.cpp
     unit/CacheJobsTest.cpp
     unit/CoreTest.cpp
     unit/CommandStackTest.cpp

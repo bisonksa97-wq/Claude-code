@@ -1,6 +1,7 @@
 #include "app/EditorSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <map>
 
@@ -927,6 +928,89 @@ Status EditorSession::moveTrack(const std::string& trackId, int index) {
         ofKind.erase(it);
         ofKind.insert(ofKind.begin() + index, std::move(moving));
         for (std::size_t i = 0; i < slots.size(); ++i) t.tracks[slots[i]] = std::move(ofKind[i]);
+        return Status::success();
+    });
+}
+
+// --- Clip transforms --------------------------------------------------------------------
+
+namespace {
+
+// Finds a video clip for a transform edit and, when `frame` is given, checks it lies inside.
+Result<Clip*> transformTarget(Timeline& t, const std::string& clipId, std::optional<FrameIndex> frame) {
+    Clip* c = t.clip(clipId);
+    if (!c) return clipNotFound(clipId);
+    const Track* track = t.trackOfClip(clipId);
+    if (track->kind != TrackKind::Video) {
+        return makeError(ErrorCode::InvalidArgument, "timeline", "Transforms apply to video clips only.",
+                         "Select the clip on the video track.");
+    }
+    if (track->locked) return makeError(ErrorCode::Locked, "timeline", "Track " + track->name + " is locked.", "Unlock it first.");
+    if (frame && !c->contains(*frame)) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "The playhead is not over the clip.",
+                         "Move the playhead onto the clip to set a keyframe.");
+    }
+    return c;
+}
+
+double clampParam(ClipParam p, double v) {
+    const ClipParamInfo& info = paramInfo(p);
+    return std::clamp(v, info.minimum, info.maximum);
+}
+
+}  // namespace
+
+Status EditorSession::setClipParameter(const std::string& clipId, ClipParam param, double value, FrameIndex timelineFrame) {
+    if (!std::isfinite(value)) return makeError(ErrorCode::InvalidArgument, "timeline", "The value is not a number.");
+    return editTimeline(std::string("Set ") + paramInfo(param).label, [&](Timeline& t) -> Status {
+        const bool animated = t.clip(clipId) && t.clip(clipId)->transform[param].animated();
+        auto c = transformTarget(t, clipId, animated ? std::optional<FrameIndex>(timelineFrame) : std::nullopt);
+        if (!c.ok()) return c.error();
+        AnimatedValue& v = c.value()->transform[param];
+        if (v.animated()) v.setKey(c.value()->toSource(timelineFrame), clampParam(param, value));
+        else v.value = clampParam(param, value);
+        return Status::success();
+    });
+}
+
+Status EditorSession::setKeyframe(const std::string& clipId, ClipParam param, FrameIndex timelineFrame, bool present) {
+    return editTimeline(present ? "Add Keyframe" : "Remove Keyframe", [&](Timeline& t) -> Status {
+        auto c = transformTarget(t, clipId, timelineFrame);
+        if (!c.ok()) return c.error();
+        AnimatedValue& v = c.value()->transform[param];
+        const FrameIndex source = c.value()->toSource(timelineFrame);
+        if (present) {
+            v.setKey(source, v.at(source));
+            return Status::success();
+        }
+        const Keyframe* key = v.keyAt(source);
+        if (!key) return makeError(ErrorCode::NotFound, "timeline", "There is no keyframe at the playhead.");
+        const double kept = key->value;
+        v.removeKey(source);
+        if (!v.animated()) v.value = kept;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setKeyframeInterpolation(const std::string& clipId, ClipParam param, FrameIndex timelineFrame,
+                                               Interpolation interpolation) {
+    return editTimeline("Keyframe Interpolation", [&](Timeline& t) -> Status {
+        auto c = transformTarget(t, clipId, timelineFrame);
+        if (!c.ok()) return c.error();
+        AnimatedValue& v = c.value()->transform[param];
+        const FrameIndex source = c.value()->toSource(timelineFrame);
+        const Keyframe* key = v.keyAt(source);
+        if (!key) return makeError(ErrorCode::NotFound, "timeline", "There is no keyframe at the playhead.");
+        v.setKey(source, key->value, interpolation);
+        return Status::success();
+    });
+}
+
+Status EditorSession::resetClipParameter(const std::string& clipId, ClipParam param) {
+    return editTimeline(std::string("Reset ") + paramInfo(param).label, [&](Timeline& t) -> Status {
+        auto c = transformTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        c.value()->transform[param] = AnimatedValue{paramInfo(param).defaultValue, {}};
         return Status::success();
     });
 }

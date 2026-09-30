@@ -24,6 +24,7 @@
 #include "app/SourceProject.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
+#include "ui/InspectorPanel.h"
 #include "ui/MarkerDialog.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/Theme.h"
@@ -61,6 +62,12 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     poolDock->setWidget(mediaPool_);
     addDockWidget(Qt::LeftDockWidgetArea, poolDock);
 
+    inspector_ = new InspectorPanel(this);
+    auto* inspectorDock = new QDockWidget(tr("Inspector"), this);
+    inspectorDock->setObjectName("InspectorDock");
+    inspectorDock->setWidget(inspector_);
+    addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
+
     timelinePanel_ = new TimelinePanel(this);
     auto* timelineDock = new QDockWidget(tr("Timeline"), this);
     timelineDock->setObjectName("TimelineDock");
@@ -83,7 +90,13 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
         connect(v, &ViewerPanel::clearMarksRequested, this, [this, v] { clearMarks(v); });
     }
     connect(tv, &TimelineView::playheadMoved, this, [this] { setActiveViewer(viewer_); });
-    connect(tv, &TimelineView::selectionChanged, this, [this] { setActiveViewer(viewer_); });
+    connect(tv, &TimelineView::selectionChanged, this, [this](const QString& id) {
+        setActiveViewer(viewer_);
+        inspector_->setClip(id.toStdString());
+    });
+    connect(viewer_, &ViewerPanel::positionChanged, inspector_, &InspectorPanel::setPlayhead);
+    connect(inspector_, &InspectorPanel::seekRequested, viewer_, &ViewerPanel::setPosition);
+    connect(inspector_, &InspectorPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m, 4000); });
     connect(tv, &TimelineView::markerEditRequested, this, &MainWindow::editMarker);
     connect(tv, &TimelineView::markerDeleteRequested, this, [this](const QString& id) {
         runEdit([&] { return session_->removeMarker(id.toStdString()); });
@@ -153,11 +166,13 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
         timeline()->viewChanged();
         viewer_->refresh();
         syncSourceAndMarks();
+        inspector_->refresh();
         updateTitleAndActions();
     });
     assets_->prefetch(session_->project());
     mediaPool_->setSession(session_.get());
     timeline()->setSession(session_.get());
+    inspector_->setSession(session_.get());
     viewer_->setSource(&session_->project(), session_->timeline().id);
     viewer_->setTitle(tr("Program — %1").arg(qs(session_->timeline().name)));
     clearSource();

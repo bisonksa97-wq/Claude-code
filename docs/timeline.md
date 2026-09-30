@@ -33,6 +33,12 @@ Every operation is **all-or-nothing**: it runs on a copy, validates, and commits
 | `moveClip` | Moves to a position/track of the same kind with overwrite semantics |
 | `insertGap`, `clearRange` | Building blocks for sync-locked edits |
 
+## Clip transforms and keyframes (`timeline/Animation.h`)
+
+Video clips carry a `ClipTransform` of nine animatable parameters: position X/Y (timeline pixels from centre), scale %, rotation °, opacity %, and crop left/right/top/bottom %. Each is an `AnimatedValue`: a constant, or keyframes with **linear**, **hold** or **ease** (smoothstep) interpolation to the next key, held flat before the first and after the last key.
+
+Keyframes are stored in **source frames**, like clip markers, so an animation stays on the same pictures when the clip is moved, trimmed or cut. Both razor pieces keep the whole curve and evaluate it seamlessly. `EditorSession` edits (`setClipParameter`, `setKeyframe`, `setKeyframeInterpolation`, `resetClipParameter`) clamp values to each parameter's range and are undoable. Setting a value on an animated parameter keys it at the playhead. Removing the last keyframe keeps its value, so nothing jumps.
+
 ## Selection and multi-clip edits
 
 The timeline UI keeps a selection *set* (Ctrl-click toggles, Shift-click adds, dragging a box on empty space selects what it touches, plus Select All, Select Forward from Playhead and Deselect All). Linked partners are implied. Session APIs take lists and are one undo step each:

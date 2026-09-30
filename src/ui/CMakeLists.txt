@@ -1,6 +1,7 @@
 set(CMAKE_AUTOMOC ON)
 
 add_library(up_ui STATIC
+    InspectorPanel.cpp
     MainWindow.cpp
     MarkerDialog.cpp
     MediaPoolPanel.cpp

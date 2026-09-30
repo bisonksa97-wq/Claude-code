@@ -87,11 +87,40 @@ std::vector<Marker> markersFromJson(const json& j) {
     return out;
 }
 
+// Only parameters that differ from their defaults are written, keeping files readable.
+json toJson(const ClipTransform& t) {
+    json out = json::object();
+    for (ClipParam p : kAllClipParams) {
+        const AnimatedValue& v = t[p];
+        if (!v.animated() && v.value == paramInfo(p).defaultValue) continue;
+        json keys = json::array();
+        for (const auto& k : v.keys)
+            keys.push_back(json{{"frame", k.frame}, {"value", k.value}, {"interpolation", toString(k.interpolation)}});
+        out[paramInfo(p).id] = json{{"value", v.value}, {"keys", keys}};
+    }
+    return out;
+}
+
+ClipTransform transformFromJson(const json& j) {
+    ClipTransform t;
+    for (ClipParam p : kAllClipParams) {
+        if (!j.contains(paramInfo(p).id)) continue;
+        const json& pj = j.at(paramInfo(p).id);
+        AnimatedValue& v = t[p];
+        v.value = pj.value("value", paramInfo(p).defaultValue);
+        for (const auto& kj : pj.value("keys", json::array())) {
+            v.setKey(kj.at("frame").get<FrameIndex>(), kj.at("value").get<double>(),
+                     interpolationFromString(kj.value("interpolation", "linear")).value_or(Interpolation::Linear));
+        }
+    }
+    return t;
+}
+
 json toJson(const Clip& c) {
     return json{{"id", c.id},         {"mediaId", c.mediaId},   {"name", c.name},
                 {"start", c.start},   {"duration", c.duration}, {"sourceIn", c.sourceIn},
                 {"sourceLength", c.sourceLength}, {"linkId", c.linkId}, {"enabled", c.enabled},
-                {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}};
+                {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}, {"transform", toJson(c.transform)}};
 }
 
 Clip clipFromJson(const json& j) {
@@ -107,6 +136,7 @@ Clip clipFromJson(const json& j) {
     c.enabled = j.value("enabled", true);
     c.gainDb = j.value("gainDb", 0.0);
     c.markers = markersFromJson(j.value("markers", json::array()));
+    c.transform = transformFromJson(j.value("transform", json::object()));
     return c;
 }
 

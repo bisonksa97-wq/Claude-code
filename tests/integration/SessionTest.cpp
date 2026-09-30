@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "app/EditorSession.h"
+#include "codec/VideoDecoder.h"
+#include "render/ExportJob.h"
 #include "support/TestSupport.h"
 
 using namespace up;
@@ -447,3 +449,67 @@ TEST_F(SessionTest, TrackAddRemoveRenameReorder) {
         ASSERT_TRUE(session->removeTrack(tl.trackIdsOfKind(TrackKind::Video).back(), true).ok());
     EXPECT_EQ(session->removeTrack(tl.trackIdsOfKind(TrackKind::Video)[0], true).error().code, ErrorCode::InvalidArgument);
 }
+
+TEST_F(SessionTest, TransformParametersAndKeyframes) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // V1 [0,50)
+    const std::string v = track(0).clips[0].id;
+    const std::string audio = track(2).clips[0].id;
+    // Constant edits; values are clamped to the parameter's range.
+    ASSERT_TRUE(session->setClipParameter(v, ClipParam::Scale, 50, 0).ok());
+    ASSERT_TRUE(session->setClipParameter(v, ClipParam::Opacity, 250, 0).ok());
+    const Clip& clip = *session->timeline().clip(v);
+    EXPECT_EQ(clip.transform[ClipParam::Scale].value, 50);
+    EXPECT_EQ(clip.transform[ClipParam::Opacity].value, 100);
+    EXPECT_EQ(session->setClipParameter(audio, ClipParam::Scale, 10, 0).error().code, ErrorCode::InvalidArgument);
+
+    // Keyframes: add at 10 (captures current value), set a new value at 30 (adds a key).
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 10, true).ok());
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 30, true).ok());
+    ASSERT_TRUE(session->setClipParameter(v, ClipParam::Opacity, 0, 30).ok());
+    const Clip& animated = *session->timeline().clip(v);
+    EXPECT_EQ(animated.transform[ClipParam::Opacity].keys.size(), 2u);
+    EXPECT_DOUBLE_EQ(animated.transform[ClipParam::Opacity].at(20), 50);
+    ASSERT_TRUE(session->setKeyframeInterpolation(v, ClipParam::Opacity, 10, Interpolation::Hold).ok());
+    EXPECT_DOUBLE_EQ(session->timeline().clip(v)->transform[ClipParam::Opacity].at(20), 100);
+    EXPECT_EQ(session->setKeyframe(v, ClipParam::Opacity, 70, true).error().code, ErrorCode::OutOfRange);  // off the clip
+    EXPECT_EQ(session->setKeyframe(v, ClipParam::Opacity, 20, false).error().code, ErrorCode::NotFound);
+
+    // Keyframes follow the source: moving the clip keeps the animation on the same pictures.
+    ASSERT_TRUE(session->moveClips({v}, 100).ok());
+    EXPECT_DOUBLE_EQ(session->timeline().clip(v)->transform[ClipParam::Opacity].at(30), 0);
+    ASSERT_TRUE(session->undo());
+
+    // Removing the last keyframe keeps its value as the constant.
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 10, false).ok());
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 30, false).ok());
+    EXPECT_FALSE(session->timeline().clip(v)->transform[ClipParam::Opacity].animated());
+    EXPECT_EQ(session->timeline().clip(v)->transform[ClipParam::Opacity].value, 0);
+
+    ASSERT_TRUE(session->resetClipParameter(v, ClipParam::Opacity).ok());
+    ASSERT_TRUE(session->resetClipParameter(v, ClipParam::Scale).ok());
+    EXPECT_TRUE(session->timeline().clip(v)->transform.isIdentity());
+    session->undo();
+    EXPECT_EQ(session->timeline().clip(v)->transform[ClipParam::Scale].value, 50);
+}
+
+TEST_F(SessionTest, AnimatedOpacityFadeExports) {
+    ASSERT_TRUE(session->appendMedia(a).ok());  // red-ish clip, 50 frames
+    const std::string v = track(0).clips[0].id;
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 0, true).ok());
+    ASSERT_TRUE(session->setClipParameter(v, ClipParam::Opacity, 0, 0).ok());
+    ASSERT_TRUE(session->setKeyframe(v, ClipParam::Opacity, 40, true).ok());
+    ASSERT_TRUE(session->setClipParameter(v, ClipParam::Opacity, 100, 40).ok());
+    test::TempDir tmp;
+    render::ExportOptions options;
+    options.output = tmp / "fade.mp4";
+    ASSERT_TRUE(render::ExportJob(session->project(), session->timeline().id, options).run().ok());
+    auto dec = VideoDecoder::open(options.output);
+    ASSERT_TRUE(dec.ok());
+    const double r0 = test::averageColor(dec.value()->frameAt(0.001).value()).r;
+    const double r20 = test::averageColor(dec.value()->frameAt(20 / 25.0 + 0.001).value()).r;
+    const double r45 = test::averageColor(dec.value()->frameAt(45 / 25.0 + 0.001).value()).r;
+    EXPECT_LT(r0, 10);           // faded from black
+    EXPECT_NEAR(r20, 100, 15);   // half way (source red is 200)
+    EXPECT_GT(r45, 185);         // fully up
+}
+
