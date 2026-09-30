@@ -35,7 +35,8 @@ _Last updated: session 9._
 | 7 | Motion graphics | PARTIAL | Keyframed position, scale, rotation, opacity and crop per clip with linear/hold/ease interpolation, an Inspector panel and keyframe navigation. No text, shapes, graph editor or expressions. |
 | 8 | 2D compositing | PARTIAL | All video tracks blend bottom-to-top with transforms and opacity (straight-alpha over). No blend modes, masks or node graph. |
 | 9–15 | 3D compositing, VFX, keying, roto, tracking, camera tracking, particles | NOT IMPLEMENTED | |
-| 16–18 | Color grading, HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
+| 16 | Color grading | PARTIAL | Per-clip primary correction: lift/gamma/gain/offset (master and RGB), contrast with pivot, saturation, exposure, temperature and tint, all keyframable. Color panel with four balance wheels and numeric rows, copy/paste/reset grade (undoable). Scopes panel: waveform, RGB parade, vectorscope and histogram of the program monitor. CLI `grade` and `scopes`. No curves, qualifiers, windows, LUTs, node graph, grade versions or colour management (OCIO/ACES); 8-bit CPU processing; wheel drags commit on release (no live preview while dragging). |
+| 17–18 | HDR, RAW | NOT IMPLEMENTED | 8-bit RGBA CPU pipeline only; no colour management yet. |
 | 19–20 | Audio editing, DAW mixing | PARTIAL | Track gain and pan, mute/solo, clip gain, keyframable clip volume and pan, constant-power crossfades and fades, per-track insert effects (gain, 3-band EQ, compressor), mixer panel with meters, stereo mix for playback and export. No buses/sends, track automation lanes, surround or plugin hosting. |
 | 21–22 | ADR, Foley | NOT IMPLEMENTED | |
 | 23 | Captions/subtitles | NOT IMPLEMENTED | |
@@ -47,7 +48,7 @@ _Last updated: session 9._
 | 39–41 | Cloud collaboration, review/approval, version control | NOT IMPLEMENTED | |
 | 42 | Plugin support | NOT IMPLEMENTED | |
 | 43 | Python/Lua/JS automation | NOT IMPLEMENTED | The `EditorSession` service layer is the planned binding surface. |
-| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice, plus three-point editing, markers, duplicate, `analyze`, `cache-info` and `cache-clear`. No `transcode/proxy/transcribe/archive` yet. |
+| 44 | CLI automation | PARTIAL | `ultimatepost` covers the whole slice, plus three-point editing, markers, duplicate, transforms, transitions, tracks, audio effects, colour grades and scopes, `analyze`, `cache-info` and `cache-clear`. No `transcode/proxy/transcribe/archive` yet. |
 | 45–46 | GPU / hardware acceleration | NOT IMPLEMENTED | CPU reference pipeline only; FFmpeg decoder frame threading is enabled. |
 | 47 | Proxy workflows | NOT IMPLEMENTED | |
 | 48 | Render caching | PARTIAL | The cache engine (§57) exists and holds the thumbnail and waveform caches. There is no playback, effect or render cache yet. |
@@ -60,7 +61,7 @@ _Last updated: session 9._
 |---|---|---|
 | Undo/redo (§16) | IMPLEMENTED | Command stack with groups/transactions, configurable limit, clean-state tracking. Timeline edits use exact snapshots. |
 | Autosave / crash recovery (§74) | IMPLEMENTED | Periodic autosave (setting `autosave/intervalSeconds`, default 120), recovery prompts on open and at startup, transactional writes. No crash-report capture yet. |
-| Versioned format + migrations (§8) | IMPLEMENTED | Format v2 with a real v1 → v2 migration, tested against a verbatim v1 document. |
+| Versioned format + migrations (§8) | IMPLEMENTED | Format v7 with a migration step for every version since v1, each tested against a document in the old shape (v1 verbatim). |
 | Human-readable errors (§76) | IMPLEMENTED | Error id, message, suggestion, technical details; copyable in UI dialogs. |
 | Logging (§77) | IMPLEMENTED | Per-subsystem levels; log file in the app-data folder. |
 | Themes / design tokens (§69) | IMPLEMENTED | Dark, light, high contrast. |

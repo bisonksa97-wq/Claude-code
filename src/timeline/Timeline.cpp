@@ -222,6 +222,12 @@ Status Timeline::validate() const {
             if (!checkMarkers(c.markers, false)) return fail("invalid markers on clip " + c.id);
             if ((c.transitionIn && c.transitionIn->duration <= 0) || (c.transitionOut && c.transitionOut->duration <= 0))
                 return fail("a transition on clip " + c.id + " has no length");
+            for (std::size_t g = 0; g < kGradeParamCount; ++g) {
+                const AnimatedValue& v = c.grade.values[g];
+                if (!std::isfinite(v.value)) return fail("non-finite grade value on clip " + c.id);
+                for (std::size_t k = 1; k < v.keys.size(); ++k)
+                    if (v.keys[k - 1].frame >= v.keys[k].frame) return fail("unsorted grade keyframes on clip " + c.id);
+            }
             for (ClipParam p : kAllClipParams) {
                 const AnimatedValue& v = c.transform[p];
                 if (!std::isfinite(v.value)) return fail("non-finite " + std::string(paramInfo(p).id) + " on clip " + c.id);

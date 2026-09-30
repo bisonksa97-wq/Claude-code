@@ -1,6 +1,6 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **6**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **7**, `Project::kFormatVersion`).
 
 ```jsonc
 {
@@ -45,6 +45,9 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
                          "opacity": { "value": 100, "keys": [
                            { "frame": 0, "value": 0, "interpolation": "ease" },
                            { "frame": 40, "value": 100, "interpolation": "linear" } ] } },
+                       "grade": {                              // video clips; only non-default parameters
+                         "saturation": { "value": 0.5, "keys": [] },
+                         "gainR": { "value": 1.2, "keys": [ { "frame": 10, "value": 1.2, "interpolation": "linear" } ] } },
                        "transitionIn": { "kind": "dissolve", "duration": 25, "alignment": "center" },
                        "transitionOut": null } ]
       } ]
@@ -72,10 +75,11 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 |---|---|---|
 | 1 | First format | – |
 | 2 | Timeline `markIn`/`markOut` and `targets`; media `markIn`/`markOut` | Targets become the first video and first audio track (how v1 placed media); all marks are null. Covered by `ProjectFormat.MigratesVersion1Documents`. |
-| 6 | Track `pan` and `effects`; clip `transform` may hold `volume` (dB) and `pan` | Pan 0 and an empty effect chain on every track. Covered by `ProjectFormat.RoundTripsTrackAudioAndMigratesV5`. Invalid effect parameters in a file are rejected on load. |
-| 5 | Clip `transitionIn` / `transitionOut` | Both null on every clip. Covered by `ProjectFormat.RoundTripsTransitionsAndMigratesV4`. |
-| 4 | Clip `transform` (animatable position, scale, rotation, opacity, crop) | Empty transform (identity) on every clip. Covered by `ProjectFormat.MigratesVersion3Documents`. |
 | 3 | Timeline and clip `markers` | Empty marker lists everywhere. Covered by `ProjectFormat.MigratesVersion2Documents` (and v1 files migrate through both steps). |
+| 4 | Clip `transform` (animatable position, scale, rotation, opacity, crop) | Empty transform (identity) on every clip. Covered by `ProjectFormat.MigratesVersion3Documents`. |
+| 5 | Clip `transitionIn` / `transitionOut` | Both null on every clip. Covered by `ProjectFormat.RoundTripsTransitionsAndMigratesV4`. |
+| 6 | Track `pan` and `effects`; clip `transform` may hold `volume` (dB) and `pan` | Pan 0 and an empty effect chain on every track. Covered by `ProjectFormat.RoundTripsTrackAudioAndMigratesV5`. Invalid effect parameters in a file are rejected on load. |
+| 7 | Clip `grade` (primary colour correction: lift/gamma/gain/offset master and RGB, contrast, pivot, saturation, exposure, temperature, tint; all animatable) | An empty grade object (identity) on every clip. Covered by `ProjectFormat.MigratesV6ToGrades`. Parameter ids are listed in `timeline/Grade.cpp`. Unknown ids are ignored, non-finite values are rejected on load, and out-of-range values are clamped when rendering. |
 
 ## Safety
 

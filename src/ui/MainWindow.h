@@ -22,9 +22,11 @@ class Project;
 
 namespace up::ui {
 
+class ColorPanel;
 class InspectorPanel;
 class MediaPoolPanel;
 class MixerPanel;
+class ScopesPanel;
 class TimelinePanel;
 class TimelineView;
 class ViewerPanel;
@@ -42,6 +44,8 @@ public:
     MediaPoolPanel* mediaPool() const { return mediaPool_; }
     InspectorPanel* inspector() const { return inspector_; }
     MixerPanel* mixer() const { return mixer_; }
+    ColorPanel* colorPanel() const { return color_; }
+    ScopesPanel* scopes() const { return scopes_; }
     ViewerPanel* viewer() const { return viewer_; }  // program monitor
     ViewerPanel* sourceViewer() const { return sourceViewer_; }
     ViewerPanel* activeViewer() const { return activeViewer_; }
@@ -93,6 +97,7 @@ private:
     void jumpToMarker(bool next);
     void applyTransition(TransitionKind kind);
     void removeTransitions();
+    void pasteGrade();
 
     // Edit commands operating on the selected clip / playhead.
     void razor();
@@ -109,6 +114,8 @@ private:
     MediaPoolPanel* mediaPool_ = nullptr;
     InspectorPanel* inspector_ = nullptr;
     MixerPanel* mixer_ = nullptr;
+    ColorPanel* color_ = nullptr;
+    ScopesPanel* scopes_ = nullptr;
     ViewerPanel* viewer_ = nullptr;
     ViewerPanel* sourceViewer_ = nullptr;
     ViewerPanel* activeViewer_ = nullptr;

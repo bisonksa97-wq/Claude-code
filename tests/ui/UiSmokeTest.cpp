@@ -22,10 +22,14 @@
 #include <QDockWidget>
 #include <QSlider>
 
+#include <QPushButton>
+
+#include "ui/ColorPanel.h"
 #include "ui/EffectsDialog.h"
 #include "ui/InspectorPanel.h"
 #include "ui/MixerPanel.h"
 #include "ui/MediaPoolPanel.h"
+#include "ui/ScopesPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
 #include "ui/ViewerPanel.h"
@@ -531,6 +535,97 @@ TEST(Ui, TransitionsFromTheEditMenu) {
     EXPECT_FALSE(tl.tracks[2].clips[1].transitionIn.has_value());
     window.session()->undo();
     EXPECT_TRUE(tl.clip(blue)->transitionIn.has_value());
+}
+
+TEST(Ui, ColorPanelGradesAndScopesFollow) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(220, 20, 20, 50));
+    test::makeMedia(dir / "blue.mp4", test::solid(20, 20, 220, 50));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 850);
+    auto session = EditorSession::createNew("Grade", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    ASSERT_TRUE(session->appendMedia(ids[1]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    const std::string red = tl.tracks[0].clips[0].id;
+    const std::string blue = tl.tracks[0].clips[1].id;
+    ui::ColorPanel* color = window.colorPanel();
+    ui::ScopesPanel* scopes = window.scopes();
+
+    // An audio clip cannot be graded; the video clip can.
+    window.timeline()->selectClip(QString::fromStdString(tl.tracks[2].clips[0].id));
+    EXPECT_FALSE(color->valueEditor(GradeParam::Saturation)->isEnabled());
+    window.timeline()->selectClip(QString::fromStdString(red));
+    EXPECT_EQ(color->clipId(), red);
+    EXPECT_TRUE(color->valueEditor(GradeParam::Saturation)->isEnabled());
+
+    // Saturation 0 turns the red picture grey in the program monitor and on the scopes.
+    window.viewer()->setPosition(10);
+    scopes->updateNow();
+    EXPECT_GT(scopes->scopes().maximum[0], 200);
+    EXPECT_LT(scopes->scopes().maximum[1], 40);
+    color->valueEditor(GradeParam::Saturation)->setValue(0);
+    EXPECT_EQ(tl.clip(red)->grade[GradeParam::Saturation].value, 0);
+    QApplication::processEvents();
+    const QColor grey = window.viewer()->currentImage().pixelColor(160, 90);
+    EXPECT_NEAR(grey.red(), grey.green(), 3);
+    EXPECT_NEAR(grey.green(), grey.blue(), 3);
+    scopes->updateNow();
+    EXPECT_NEAR(scopes->scopes().maximum[0], scopes->scopes().maximum[1], 3);
+    for (ui::ScopeMode mode : {ui::ScopeMode::Waveform, ui::ScopeMode::Parade, ui::ScopeMode::Vectorscope, ui::ScopeMode::Histogram}) {
+        scopes->setMode(mode);
+        EXPECT_FALSE(scopes->scopeImage().isNull());
+    }
+
+    // A gain-wheel move towards blue changes R, G and B together in one undo step,
+    // without changing brightness (the offsets have zero Rec.709 luma).
+    color->commitWheel(2, 1.0, 0.0);
+    const ClipGrade& g = tl.clip(red)->grade;
+    EXPECT_GT(g[GradeParam::GainB].value, 1.5);
+    EXPECT_LT(g[GradeParam::GainG].value, 1.0);  // +Cb only: G compensates, R is untouched
+    EXPECT_NEAR(g[GradeParam::GainR].value, 1.0, 1e-9);
+    const double luma = 0.2126 * (g[GradeParam::GainR].value - 1) + 0.7152 * (g[GradeParam::GainG].value - 1) +
+                        0.0722 * (g[GradeParam::GainB].value - 1);
+    EXPECT_NEAR(luma, 0.0, 1e-9);
+    EXPECT_GT(color->wheel(2)->balanceX(), 0.99);
+    window.session()->undo();
+    EXPECT_EQ(g[GradeParam::GainB].value, 1.0);
+    EXPECT_EQ(g[GradeParam::GainR].value, 1.0);
+    EXPECT_NEAR(color->wheel(2)->balanceX(), 0.0, 1e-9);
+
+    // Keyframes: the ◆ toggle keys saturation at the playhead.
+    color->keyframeToggle(GradeParam::Saturation)->click();
+    EXPECT_EQ(tl.clip(red)->grade[GradeParam::Saturation].keys.size(), 1u);
+
+    // Copy the grade and paste it onto the blue clip (its linked audio is skipped).
+    EXPECT_FALSE(color->pasteButton()->isEnabled());
+    color->copyButton()->click();
+    window.timeline()->selectClip(QString::fromStdString(blue));
+    ASSERT_TRUE(color->pasteButton()->isEnabled());
+    color->pasteButton()->click();
+    EXPECT_EQ(tl.clip(blue)->grade[GradeParam::Saturation].keys.size(), 1u);
+    window.viewer()->setPosition(tl.clip(blue)->start + 10);
+    QApplication::processEvents();
+    const QColor blueGrey = window.viewer()->currentImage().pixelColor(160, 90);
+    EXPECT_NEAR(blueGrey.red(), blueGrey.blue(), 3);
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_COLOR")) {
+        window.findChild<QDockWidget*>("ColorDock")->raise();
+        scopes->setMode(ui::ScopeMode::Parade);
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+
+    // Reset Grade from the Color menu is undoable.
+    findAction(&window, "Reset Grade")->trigger();
+    EXPECT_TRUE(tl.clip(blue)->grade.isIdentity());
+    window.session()->undo();
+    EXPECT_FALSE(tl.clip(blue)->grade.isIdentity());
 }
 
 TEST(Ui, AudioMixerStripsMetersAndEffects) {

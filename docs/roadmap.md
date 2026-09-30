@@ -36,13 +36,21 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ✅ Fades and crossfades (session 8); pan, clip volume/pan keyframes, mixer panel with meters, EQ/compressor/gain inserts (session 9)
 - ☐ Buses, sends and returns; track automation lanes; limiter, gate, de-esser; loudness (LUFS) metering
 
-## Phases 5–15
-Colour (OCIO), multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
+## Phase 5: Colour ◐
+- ✅ Primary correction per clip (lift/gamma/gain/offset, contrast/pivot, saturation, exposure, white balance), keyframable, format v7 (session 10)
+- ✅ Color panel with balance wheels, copy/paste/reset grade; scopes (waveform, parade, vectorscope, histogram); CLI `grade`/`scopes` (session 10)
+- ☐ Curves (custom RGB/luma, hue-vs-hue/sat/lum), 3D LUT import (.cube), grade versions and bypass
+- ☐ Colour management: OCIO/ACES input/working/output transforms, float working space, HDR
+- ☐ Qualifiers, power windows, tracking, node graph; scopes on a worker thread / GPU
+
+## Phases 6–15
+Multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Phase 5: colour, part 1: primary correction and scopes.**
-1. A colour-correction model per clip: lift/gamma/gain/offset (RGB and master), contrast with pivot, saturation, temperature/tint. It is animatable like the transform and stored as a clip "grade" (format v7 with a migration).
-2. A CPU grading pass in the compositor after decode and before transform, working in linear-light float with sRGB/Rec.709 transfer handling. This is the reference implementation for a later GPU path.
-3. Scopes on the program monitor: waveform, RGB parade, vectorscope and histogram, computed from the rendered frame on a worker thread.
-4. A Color workspace panel with wheels and sliders for the selected clip, plus copy/paste of grades.
-5. Tests: golden values for each operation on synthetic ramps and colour patches, identity at defaults, scope histograms and vectorscope positions for known colours, persistence and migration.
+**Phase 5: colour, part 2: curves, LUTs and a float grading path.**
+1. Move grading to a float (32-bit linear) intermediate per layer, so heavy grades no longer band, keeping 8-bit output; golden tests before/after.
+2. Custom curves per clip (master/R/G/B splines, hue-vs-sat, hue-vs-hue, lum-vs-sat), keyframable as a whole, stored in the grade (format v8 with a migration).
+3. 3D LUT support: parse `.cube` files (validation, readable errors), trilinear/tetrahedral interpolation, a per-clip LUT slot and a timeline output LUT; LUT files referenced like media (relinkable).
+4. Grade bypass per clip and for the whole timeline, and A/B grade versions.
+5. UI: a curves editor in the Color panel and a LUT picker; CLI `grade curve` / `grade lut`.
+6. Tests: curve evaluation and monotonicity, `.cube` parsing (good and malformed files), LUT identity and known transforms, bypass, persistence and migration.

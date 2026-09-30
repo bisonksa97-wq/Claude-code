@@ -68,6 +68,13 @@ const ProjectMigrator& ProjectMigrator::standard() {
                 }
             return Status::success();
         });
+        // v6 -> v7: clips gain a primary colour grade (identity for existing clips).
+        m.addStep(6, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"])
+                for (auto& tr : tl["tracks"])
+                    for (auto& clip : tr["clips"]) clip["grade"] = nlohmann::json::object();
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

@@ -131,12 +131,43 @@ std::optional<Transition> transitionFromJson(const json& j, const char* key) {
     return t;
 }
 
+// Grade parameters, written like the transform: only non-default values.
+json gradeToJson(const ClipGrade& g) {
+    json out = json::object();
+    for (std::size_t i = 0; i < kGradeParamCount; ++i) {
+        const auto p = static_cast<GradeParam>(i);
+        const AnimatedValue& v = g[p];
+        if (!v.animated() && v.value == gradeInfo(p).defaultValue) continue;
+        json keys = json::array();
+        for (const auto& k : v.keys)
+            keys.push_back(json{{"frame", k.frame}, {"value", k.value}, {"interpolation", toString(k.interpolation)}});
+        out[gradeInfo(p).id] = json{{"value", v.value}, {"keys", keys}};
+    }
+    return out;
+}
+
+ClipGrade gradeFromJson(const json& j) {
+    ClipGrade g;
+    for (std::size_t i = 0; i < kGradeParamCount; ++i) {
+        const auto p = static_cast<GradeParam>(i);
+        if (!j.contains(gradeInfo(p).id)) continue;
+        const json& pj = j.at(gradeInfo(p).id);
+        AnimatedValue& v = g[p];
+        v.value = pj.value("value", gradeInfo(p).defaultValue);
+        for (const auto& kj : pj.value("keys", json::array()))
+            v.setKey(kj.at("frame").get<FrameIndex>(), kj.at("value").get<double>(),
+                     interpolationFromString(kj.value("interpolation", "linear")).value_or(Interpolation::Linear));
+    }
+    return g;
+}
+
 json toJson(const Clip& c) {
     return json{{"id", c.id},         {"mediaId", c.mediaId},   {"name", c.name},
                 {"start", c.start},   {"duration", c.duration}, {"sourceIn", c.sourceIn},
                 {"sourceLength", c.sourceLength}, {"linkId", c.linkId}, {"enabled", c.enabled},
                 {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}, {"transform", toJson(c.transform)},
-                {"transitionIn", toJson(c.transitionIn)}, {"transitionOut", toJson(c.transitionOut)}};
+                {"transitionIn", toJson(c.transitionIn)}, {"transitionOut", toJson(c.transitionOut)},
+                {"grade", gradeToJson(c.grade)}};
 }
 
 Clip clipFromJson(const json& j) {
@@ -155,6 +186,7 @@ Clip clipFromJson(const json& j) {
     c.transform = transformFromJson(j.value("transform", json::object()));
     c.transitionIn = transitionFromJson(j, "transitionIn");
     c.transitionOut = transitionFromJson(j, "transitionOut");
+    c.grade = gradeFromJson(j.value("grade", json::object()));
     return c;
 }
 

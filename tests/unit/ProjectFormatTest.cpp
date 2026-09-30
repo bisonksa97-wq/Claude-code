@@ -284,6 +284,22 @@ TEST(ProjectFormat, RoundTripsTrackAudioAndMigratesV5) {
     EXPECT_FALSE(ProjectSerializer::fromJson(broken.dump()).ok());
 }
 
+TEST(ProjectFormat, MigratesV6ToGrades) {
+    auto doc = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    doc["formatVersion"] = 6;
+    for (auto& clip : doc["timelines"][0]["tracks"][0]["clips"]) clip.erase("grade");
+    auto p = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(p.ok()) << p.error().toString();
+    EXPECT_TRUE(p.value().timelines[0].tracks[0].clips[0].grade.isIdentity());
+    // Only non-default grade values are written.
+    Project q = sampleProject();
+    q.timelines[0].tracks[0].clips[0].grade[GradeParam::LiftB].value = 0.05;
+    auto written = nlohmann::json::parse(ProjectSerializer::toJson(q));
+    const auto& grade = written["timelines"][0]["tracks"][0]["clips"][0]["grade"];
+    EXPECT_EQ(grade.size(), 1u);
+    EXPECT_DOUBLE_EQ(grade["liftB"]["value"].get<double>(), 0.05);
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

@@ -1177,5 +1177,109 @@ Status EditorSession::moveTrackEffect(const std::string& trackId, const std::str
     });
 }
 
+// --- Colour grades ------------------------------------------------------------------------
+
+namespace {
+
+Result<Clip*> gradeTarget(Timeline& t, const std::string& clipId, std::optional<FrameIndex> frame) {
+    Clip* c = t.clip(clipId);
+    if (!c) return clipNotFound(clipId);
+    const Track* track = t.trackOfClip(clipId);
+    if (track->kind != TrackKind::Video) {
+        return makeError(ErrorCode::InvalidArgument, "color", "Colour grades apply to video clips only.",
+                         "Select the clip on the video track.");
+    }
+    if (track->locked) return makeError(ErrorCode::Locked, "timeline", "Track " + track->name + " is locked.", "Unlock it first.");
+    if (frame && !c->contains(*frame)) {
+        return makeError(ErrorCode::OutOfRange, "timeline", "The playhead is not over the clip.",
+                         "Move the playhead onto the clip to set a keyframe.");
+    }
+    return c;
+}
+
+}  // namespace
+
+Status EditorSession::setGradeParameter(const std::string& clipId, GradeParam param, double value, FrameIndex timelineFrame) {
+    return setGradeParameters(clipId, {{param, value}}, timelineFrame, std::string("Grade ") + gradeInfo(param).label);
+}
+
+Status EditorSession::setGradeParameters(const std::string& clipId, const std::vector<std::pair<GradeParam, double>>& values,
+                                         FrameIndex timelineFrame, const std::string& commandName) {
+    for (const auto& [param, value] : values) {
+        if (!std::isfinite(value)) return makeError(ErrorCode::InvalidArgument, "color", "The value is not a number.");
+    }
+    return editTimeline(commandName, [&](Timeline& t) -> Status {
+        for (const auto& [param, value] : values) {
+            const GradeParamInfo& info = gradeInfo(param);
+            const bool animated = t.clip(clipId) && t.clip(clipId)->grade[param].animated();
+            auto c = gradeTarget(t, clipId, animated ? std::optional<FrameIndex>(timelineFrame) : std::nullopt);
+            if (!c.ok()) return c.error();
+            AnimatedValue& v = c.value()->grade[param];
+            const double clamped = std::clamp(value, info.minimum, info.maximum);
+            if (v.animated()) v.setKey(c.value()->toSource(timelineFrame), clamped);
+            else v.value = clamped;
+        }
+        return Status::success();
+    });
+}
+
+Status EditorSession::setGradeKeyframe(const std::string& clipId, GradeParam param, FrameIndex timelineFrame, bool present) {
+    return editTimeline(present ? "Add Grade Keyframe" : "Remove Grade Keyframe", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, timelineFrame);
+        if (!c.ok()) return c.error();
+        AnimatedValue& v = c.value()->grade[param];
+        const FrameIndex source = c.value()->toSource(timelineFrame);
+        if (present) {
+            v.setKey(source, v.at(source));
+            return Status::success();
+        }
+        const Keyframe* key = v.keyAt(source);
+        if (!key) return makeError(ErrorCode::NotFound, "color", "There is no keyframe at the playhead.");
+        const double kept = key->value;
+        v.removeKey(source);
+        if (!v.animated()) v.value = kept;
+        return Status::success();
+    });
+}
+
+Status EditorSession::resetGrade(const std::string& clipId, std::optional<GradeParam> param) {
+    return editTimeline(param ? std::string("Reset ") + gradeInfo(*param).label : "Reset Grade", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        if (param) c.value()->grade[*param] = AnimatedValue{gradeInfo(*param).defaultValue, {}};
+        else c.value()->grade = ClipGrade{};
+        return Status::success();
+    });
+}
+
+Status EditorSession::copyGrade(const std::string& clipId) {
+    const Clip* c = timeline().clip(clipId);
+    if (!c) return clipNotFound(clipId);
+    if (timeline().trackOfClip(clipId)->kind != TrackKind::Video) {
+        return makeError(ErrorCode::InvalidArgument, "color", "Only video clips have a grade to copy.");
+    }
+    gradeClipboard_ = c->grade;
+    return Status::success();
+}
+
+Status EditorSession::pasteGrade(const std::vector<std::string>& clipIds) {
+    if (!gradeClipboard_) {
+        return makeError(ErrorCode::InvalidArgument, "color", "No grade has been copied.", "Copy a clip's grade first.");
+    }
+    return editTimeline("Paste Grade", [&](Timeline& t) -> Status {
+        int pasted = 0;
+        for (const auto& id : clipIds) {
+            if (!t.clip(id)) return clipNotFound(id);
+            if (t.trackOfClip(id)->kind != TrackKind::Video) continue;  // linked audio in the selection
+            auto c = gradeTarget(t, id, std::nullopt);
+            if (!c.ok()) return c.error();
+            c.value()->grade = *gradeClipboard_;
+            ++pasted;
+        }
+        if (pasted == 0) return makeError(ErrorCode::InvalidArgument, "color", "Select one or more video clips to paste onto.");
+        return Status::success();
+    });
+}
+
 }  // namespace up
 

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/Log.h"
+#include "render/ColorGrading.h"
 #include "render/Compositing.h"
 #include "timeline/Transitions.h"
 
@@ -117,6 +118,9 @@ Status FrameCompositor::drawLayer(VideoFrame& canvas, const Layer& l, const Time
     if (image.empty()) {
         image = VideoFrame(dw, dh);
         image.fill(kOfflineColor[0], kOfflineColor[1], kOfflineColor[2]);
+    } else {
+        // Primary grade on the source picture, before it is transformed and composited.
+        applyGrade(image, evaluateGrade(l.clip->grade, l.clip->toSource(frame)));
     }
     LayerPlacement placement;
     placement.centerX = outWidth / 2.0 + l.posX * outScale;

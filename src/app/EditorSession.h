@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/CommandStack.h"
@@ -148,6 +149,20 @@ public:
     Result<FrameIndex> applyDefaultTransition(const std::string& clipId, FrameIndex frame,
                                               TransitionKind kind = TransitionKind::Dissolve, FrameIndex preferred = 0);
 
+    // --- Colour grades (video clips only) --------------------------------------------------
+    // Like setClipParameter: keys the value at `timelineFrame` when the parameter is animated.
+    Status setGradeParameter(const std::string& clipId, GradeParam param, double value, FrameIndex timelineFrame);
+    // Sets several parameters as one undo step (e.g. a colour-wheel drag moving R, G and B).
+    Status setGradeParameters(const std::string& clipId, const std::vector<std::pair<GradeParam, double>>& values,
+                              FrameIndex timelineFrame, const std::string& commandName = "Grade");
+    Status setGradeKeyframe(const std::string& clipId, GradeParam param, FrameIndex timelineFrame, bool present);
+    // Resets one parameter, or the whole grade when `param` is empty.
+    Status resetGrade(const std::string& clipId, std::optional<GradeParam> param = std::nullopt);
+    // Copies a clip's grade (not the project; not undoable) and pastes it onto clips (one step).
+    Status copyGrade(const std::string& clipId);
+    Status pasteGrade(const std::vector<std::string>& clipIds);
+    bool hasCopiedGrade() const { return gradeClipboard_.has_value(); }
+
     // --- Track audio effects (audio tracks only; one undo step each) ----------------------
     Result<std::string> addTrackEffect(const std::string& trackId, const std::string& type);
     // Replaces the effect with the same id (parameters, enabled); values are validated.
@@ -228,6 +243,7 @@ private:
     Project project_;
     CommandStack history_;
     Clipboard clipboard_;
+    std::optional<ClipGrade> gradeClipboard_;
     ChangeListener listener_;
 };
 

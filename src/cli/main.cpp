@@ -21,6 +21,7 @@
 #include "media/SyntheticMedia.h"
 #include "render/ExportJob.h"
 #include "render/FrameCompositor.h"
+#include "render/Scopes.h"
 
 namespace fs = std::filesystem;
 using namespace up;
@@ -173,6 +174,16 @@ Transforms (params: positionX positionY scale rotation opacity cropLeft cropRigh
   param <project> <clip> unkey <param> --at <pos>
   param <project> <clip> interp <param> linear|hold|ease --at <pos>
   param <project> <clip> reset <param>
+
+Colour grades (video clips; params: liftMaster liftR liftG liftB gammaMaster gammaR gammaG gammaB
+  gainMaster gainR gainG gainB offsetMaster offsetR offsetG offsetB contrast pivot saturation
+  exposure temperature tint)
+  grade <project> <clip> list
+  grade <project> <clip> set <param> <value> [--at <pos>] [--key]
+  grade <project> <clip> unkey <param> --at <pos>
+  grade <project> <clip> reset [<param>]            without a param: the whole grade
+  grade <project> <clip> copy-to <clip...>          paste this clip's grade onto others (one step)
+  scopes <project> <pos>                            per-channel range and mean luma of a frame
 
 Transitions (at a clip's head: with an adjacent clip before it, an edit-point transition; else a fade)
   transition <project> <clip> in|out dissolve|dip <frames> [--align center|start|end] [--solo]
@@ -506,6 +517,84 @@ int main(int argc, char** argv) {
         }
         if (!st.ok()) return fail(st.error());
         return saveAndReport(session, "Updated " + std::string(paramInfo(*param).id));
+    }};
+
+    commands["grade"] = {3, [&](const cli::Args& a) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        auto clip = resolveClip(session.timeline(), pos[1]);
+        if (!clip.ok()) return fail(clip.error());
+        const Clip& c = *session.timeline().clip(clip.value());
+        const std::string& action = pos[2];
+        const FrameRate rate = session.timeline().frameRate;
+        if (action == "list") {
+            for (std::size_t i = 0; i < kGradeParamCount; ++i) {
+                const GradeParam p = static_cast<GradeParam>(i);
+                const AnimatedValue& v = c.grade[p];
+                std::cout << gradeInfo(p).id << " = " << v.value;
+                for (const auto& k : v.keys) std::cout << "  [" << formatTimecode(c.toTimeline(k.frame), rate) << ": " << k.value << "]";
+                std::cout << "\n";
+            }
+            return 0;
+        }
+        if (action == "copy-to") {
+            if (pos.size() < 4) return usageError("grade copy-to needs one or more target clips");
+            std::vector<std::string> targets;
+            for (std::size_t i = 3; i < pos.size(); ++i) {
+                auto target = resolveClip(session.timeline(), pos[i]);
+                if (!target.ok()) return fail(target.error());
+                targets.push_back(target.value());
+            }
+            Status st = session.copyGrade(clip.value());
+            if (st.ok()) st = session.pasteGrade(targets);
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Pasted the grade onto " + std::to_string(targets.size()) + " clip(s)");
+        }
+        if (action == "reset" && pos.size() == 3) {
+            Status st = session.resetGrade(clip.value());
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Reset the grade");
+        }
+        if (pos.size() < 4) return usageError("grade " + action + " needs a parameter name");
+        const auto param = gradeParamFromString(pos[3]);
+        if (!param) return usageError("unknown grade parameter '" + pos[3] + "'");
+        const auto at = parseFrame(a.option("at").value_or(std::to_string(c.start)), rate);
+        if (!at) return usageError("invalid --at");
+        Status st = Status::success();
+        if (action == "set") {
+            if (pos.size() < 5) return usageError("grade set needs a value");
+            char* end = nullptr;
+            const double value = std::strtod(pos[4].c_str(), &end);
+            if (end == pos[4].c_str() || *end != '\0') return usageError("invalid value " + pos[4]);
+            if (a.flag("key")) st = session.setGradeKeyframe(clip.value(), *param, *at, true);
+            if (st.ok()) st = session.setGradeParameter(clip.value(), *param, value, *at);
+        } else if (action == "unkey") {
+            st = session.setGradeKeyframe(clip.value(), *param, *at, false);
+        } else if (action == "reset") {
+            st = session.resetGrade(clip.value(), *param);
+        } else {
+            return usageError("grade actions are list, set, unkey, reset and copy-to");
+        }
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(session, "Updated " + std::string(gradeInfo(*param).id));
+    }};
+
+    commands["scopes"] = {2, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        const Timeline& tl = s.value()->timeline();
+        const auto at = parseFrame(pos[1], tl.frameRate);
+        if (!at) return usageError("invalid position " + pos[1]);
+        render::FrameCompositor compositor(render::resolverFor(s.value()->project()));
+        auto frame = compositor.render(tl, *at);
+        if (!frame.ok()) return fail(frame.error());
+        const render::Scopes scopes = render::computeScopes(frame.value());
+        const char* names[] = {"red", "green", "blue"};
+        for (int c = 0; c < 3; ++c)
+            std::cout << names[c] << "_min=" << int(scopes.minimum[c]) << "\n" << names[c] << "_max=" << int(scopes.maximum[c]) << "\n";
+        std::cout << "mean_luma=" << scopes.meanLuma << "\n";
+        return 0;
     }};
 
     commands["transition"] = {4, [&](const cli::Args& a) {

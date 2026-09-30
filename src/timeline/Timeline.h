@@ -8,6 +8,7 @@
 #include "audio/AudioEffect.h"
 #include "core/Result.h"
 #include "timeline/Animation.h"
+#include "timeline/Grade.h"
 
 namespace up {
 
@@ -73,7 +74,8 @@ struct Clip {
     bool enabled = true;
     double gainDb = 0.0;  // audio clips only
     std::vector<Marker> markers;  // source-frame positions
-    ClipTransform transform;      // video clips only; keyframes in source frames
+    ClipTransform transform;      // keyframes in source frames
+    ClipGrade grade;              // video clips only; keyframes in source frames
     std::optional<Transition> transitionIn;
     std::optional<Transition> transitionOut;
 

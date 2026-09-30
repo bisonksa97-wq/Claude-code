@@ -24,10 +24,12 @@
 #include "app/SourceProject.h"
 #include "core/Log.h"
 #include "render/ExportJob.h"
+#include "ui/ColorPanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/MarkerDialog.h"
 #include "ui/MediaPoolPanel.h"
 #include "ui/MixerPanel.h"
+#include "ui/ScopesPanel.h"
 #include "ui/Theme.h"
 #include "ui/TimelineView.h"
 #include "ui/ViewerPanel.h"
@@ -75,7 +77,21 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     mixerDock->setWidget(mixer_);
     addDockWidget(Qt::RightDockWidgetArea, mixerDock);
     tabifyDockWidget(inspectorDock, mixerDock);
+
+    color_ = new ColorPanel(this);
+    auto* colorDock = new QDockWidget(tr("Color"), this);
+    colorDock->setObjectName("ColorDock");
+    colorDock->setWidget(color_);
+    addDockWidget(Qt::RightDockWidgetArea, colorDock);
+    tabifyDockWidget(inspectorDock, colorDock);
     inspectorDock->raise();
+
+    scopes_ = new ScopesPanel(this);
+    auto* scopesDock = new QDockWidget(tr("Scopes"), this);
+    scopesDock->setObjectName("ScopesDock");
+    scopesDock->setWidget(scopes_);
+    addDockWidget(Qt::LeftDockWidgetArea, scopesDock);
+    splitDockWidget(poolDock, scopesDock, Qt::Vertical);
 
     timelinePanel_ = new TimelinePanel(this);
     auto* timelineDock = new QDockWidget(tr("Timeline"), this);
@@ -102,7 +118,12 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     connect(tv, &TimelineView::selectionChanged, this, [this](const QString& id) {
         setActiveViewer(viewer_);
         inspector_->setClip(id.toStdString());
+        color_->setClip(id.toStdString());
     });
+    connect(viewer_, &ViewerPanel::positionChanged, color_, &ColorPanel::setPlayhead);
+    connect(color_, &ColorPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m, 4000); });
+    connect(color_, &ColorPanel::pasteRequested, this, &MainWindow::pasteGrade);
+    scopes_->setViewer(viewer_);
     connect(viewer_, &ViewerPanel::positionChanged, inspector_, &InspectorPanel::setPlayhead);
     connect(inspector_, &InspectorPanel::seekRequested, viewer_, &ViewerPanel::setPosition);
     connect(inspector_, &InspectorPanel::errorOccurred, this, [this](const QString& m) { statusBar()->showMessage(m, 4000); });
@@ -178,6 +199,7 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
         viewer_->refresh();
         syncSourceAndMarks();
         inspector_->refresh();
+        color_->refresh();
         mixer_->refresh();
         updateTitleAndActions();
     });
@@ -185,6 +207,7 @@ void MainWindow::setSession(std::unique_ptr<EditorSession> session) {
     mediaPool_->setSession(session_.get());
     timeline()->setSession(session_.get());
     inspector_->setSession(session_.get());
+    color_->setSession(session_.get());
     mixer_->setSession(session_.get());
     viewer_->setSource(&session_->project(), session_->timeline().id);
     viewer_->setTitle(tr("Program — %1").arg(qs(session_->timeline().name)));
@@ -288,6 +311,37 @@ void MainWindow::buildMenus() {
     add(markers, tr("Add Clip Marker"), QKeySequence("Alt+M"), [this] { addMarkerAtPlayhead(true); });
     add(markers, tr("Go to Next Marker"), QKeySequence("Shift+M"), [this] { jumpToMarker(true); });
     add(markers, tr("Go to Previous Marker"), QKeySequence("Ctrl+Shift+M"), [this] { jumpToMarker(false); });
+
+    QMenu* color = menuBar()->addMenu(tr("&Color"));
+    add(color, tr("Copy Grade"), QKeySequence("Ctrl+Alt+C"), [this] {
+        for (const auto& id : selectedClips()) {
+            if (session_->timeline().trackOfClip(id)->kind != TrackKind::Video) continue;
+            Status s = session_->copyGrade(id);
+            statusBar()->showMessage(s.ok() ? tr("Grade copied") : qs(s.error().message), 3000);
+            color_->refresh();
+            return;
+        }
+        statusBar()->showMessage(tr("Select a video clip to copy its grade."), 3000);
+    });
+    add(color, tr("Paste Grade"), QKeySequence("Ctrl+Alt+V"), &MainWindow::pasteGrade);
+    add(color, tr("Reset Grade"), QKeySequence(), [this] {
+        std::vector<std::string> videoClips;
+        for (const auto& id : selectedClips())
+            if (session_->timeline().trackOfClip(id)->kind == TrackKind::Video) videoClips.push_back(id);
+        if (videoClips.empty()) {
+            statusBar()->showMessage(tr("Select a video clip first."), 3000);
+            return;
+        }
+        Transaction tx(session_->history(), "Reset Grade");
+        for (const auto& id : videoClips) {
+            Status s = session_->resetGrade(id);
+            if (!s.ok()) {
+                statusBar()->showMessage(qs(s.error().message), 4000);
+                return;
+            }
+        }
+        tx.commit();
+    });
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     add(view, tr("Zoom In"), QKeySequence("="), [this] { timeline()->zoomIn(); });
@@ -808,5 +862,15 @@ void MainWindow::removeTransitions() {
     tx.commit();
 }
 
-}  // namespace up::ui
 
+void MainWindow::pasteGrade() {
+    const auto clips = selectedClips();
+    if (clips.empty()) {
+        statusBar()->showMessage(tr("Select the clips to paste the grade onto."), 3000);
+        return;
+    }
+    Status s = session_->pasteGrade(clips);
+    if (!s.ok()) statusBar()->showMessage(qs(s.error().message), 4000);
+}
+
+}  // namespace up::ui

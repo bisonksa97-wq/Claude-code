@@ -480,3 +480,57 @@ TEST(Mixing, TrackEffectsProcessTheBusAndKeepStateAcrossCalls) {
     fx.session->undo();
     EXPECT_EQ(tl.track(fx.a1)->effects[0].type, "compressor");
 }
+
+TEST(Color, GradesRenderPersistAndCopy) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(200, 50, 50, 25));
+    auto session = EditorSession::createNew("Grade", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    const Timeline& tl = session->timeline();
+    const std::string first = tl.tracks[0].clips[0].id;
+    const std::string second = tl.tracks[0].clips[1].id;
+    auto colorAt = [&](FrameIndex f) {
+        render::FrameCompositor compositor(render::resolverFor(session->project()));
+        return test::averageColor(compositor.render(tl, f).value());
+    };
+    const auto original = colorAt(5);
+
+    // Saturation 0 turns the red clip grey (Rec.709 luma kept); undo restores it.
+    ASSERT_TRUE(session->setGradeParameter(first, GradeParam::Saturation, 0, 5).ok());
+    auto grey = colorAt(5);
+    EXPECT_NEAR(grey.r, grey.g, 2);
+    EXPECT_NEAR(grey.g, grey.b, 2);
+    EXPECT_NEAR(grey.r, 0.2126 * original.r + 0.7152 * original.g + 0.0722 * original.b, 3);
+    EXPECT_GT(colorAt(30).r, 180);  // the second clip is untouched
+
+    // Keyframed gain: dark at the clip's first frame, normal at frame 20.
+    ASSERT_TRUE(session->setGradeKeyframe(first, GradeParam::GainMaster, 0, true).ok());
+    ASSERT_TRUE(session->setGradeParameter(first, GradeParam::GainMaster, 0.0, 0).ok());
+    ASSERT_TRUE(session->setGradeKeyframe(first, GradeParam::GainMaster, 20, true).ok());
+    ASSERT_TRUE(session->setGradeParameter(first, GradeParam::GainMaster, 1.0, 20).ok());
+    EXPECT_LT(colorAt(0).r, 5);
+    EXPECT_NEAR(colorAt(10).r, grey.r * 0.5, 6);
+
+    // Copy/paste onto the second clip in one undo step; the audio half of a selection is skipped.
+    ASSERT_TRUE(session->copyGrade(first).ok());
+    ASSERT_TRUE(session->pasteGrade({second, tl.tracks[2].clips[1].id}).ok());
+    EXPECT_FALSE(tl.clip(second)->grade.isIdentity());
+    EXPECT_FALSE(session->copyGrade(tl.tracks[2].clips[0].id).ok());
+    session->undo();
+    EXPECT_TRUE(tl.clip(second)->grade.isIdentity());
+
+    // Save and reopen keeps the grade; resetting clears it.
+    ASSERT_TRUE(session->saveAs(dir / "g.uproj").ok());
+    auto reopened = EditorSession::open(dir / "g.uproj");
+    ASSERT_TRUE(reopened.ok());
+    const Clip& loaded = reopened.value()->timeline().tracks[0].clips[0];
+    EXPECT_EQ(loaded.grade[GradeParam::Saturation].value, 0);
+    EXPECT_EQ(loaded.grade[GradeParam::GainMaster].keys.size(), 2u);
+    ASSERT_TRUE(session->resetGrade(first).ok());
+    EXPECT_TRUE(tl.clip(first)->grade.isIdentity());
+    EXPECT_EQ(session->setGradeParameter(tl.tracks[2].clips[0].id, GradeParam::Contrast, 2, 5).error().code,
+              ErrorCode::InvalidArgument);
+}
+
