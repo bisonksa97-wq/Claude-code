@@ -11,6 +11,8 @@
 #include "core/Log.h"
 #include "media/MediaLibrary.h"
 #include "project/ProjectSerializer.h"
+#include "render/FrameCompositor.h"
+#include "render/Lut.h"
 #include "core/Timecode.h"
 #include "timeline/ThreePointEdit.h"
 #include "timeline/Transitions.h"
@@ -1277,6 +1279,168 @@ Status EditorSession::pasteGrade(const std::vector<std::string>& clipIds) {
             ++pasted;
         }
         if (pasted == 0) return makeError(ErrorCode::InvalidArgument, "color", "Select one or more video clips to paste onto.");
+        return Status::success();
+    });
+}
+
+namespace {
+
+Result<LutRef> checkedLut(const fs::path& file) {
+    const fs::path absolute = fs::absolute(file).lexically_normal();
+    auto lut = render::loadCubeLut(absolute);
+    if (!lut.ok()) return lut.error();
+    return LutRef{absolute, {}};
+}
+
+}  // namespace
+
+Status EditorSession::setGradeCurve(const std::string& clipId, CurveKind kind, std::vector<CurvePoint> points) {
+    if (auto problem = validateCurve(kind, points)) return makeError(ErrorCode::InvalidArgument, "color", *problem);
+    return editTimeline(std::string("Curve ") + curveLabel(kind), [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        c.value()->grade.curve(kind) = points;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setGradeLut(const std::string& clipId, const std::optional<fs::path>& lutFile) {
+    std::optional<LutRef> ref;
+    if (lutFile) {
+        auto checked = checkedLut(*lutFile);
+        if (!checked.ok()) return checked.error();
+        ref = checked.value();
+    }
+    return editTimeline(ref ? "Set LUT" : "Remove LUT", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        c.value()->grade.lut = ref;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setGradeBypass(const std::string& clipId, bool bypass) {
+    return editTimeline(bypass ? "Bypass Grade" : "Enable Grade", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        c.value()->gradeBypass = bypass;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setOutputLut(const std::optional<fs::path>& lutFile) {
+    std::optional<LutRef> ref;
+    if (lutFile) {
+        auto checked = checkedLut(*lutFile);
+        if (!checked.ok()) return checked.error();
+        ref = checked.value();
+    }
+    return editTimeline(ref ? "Set Output LUT" : "Remove Output LUT", [&](Timeline& t) -> Status {
+        t.outputLut = ref;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setGradesBypassed(bool bypassed) {
+    return editTimeline(bypassed ? "Bypass All Grades" : "Enable All Grades", [&](Timeline& t) -> Status {
+        t.gradesBypassed = bypassed;
+        return Status::success();
+    });
+}
+
+Result<int> EditorSession::relinkLut(const fs::path& oldPath, const fs::path& newPath) {
+    auto checked = checkedLut(newPath);
+    if (!checked.ok()) return checked.error();
+    const fs::path old = fs::absolute(oldPath).lexically_normal();
+    int changed = 0;
+    Status s = editTimeline("Relink LUT", [&](Timeline& t) -> Status {
+        auto relink = [&](std::optional<LutRef>& ref) {
+            if (ref && ref->path.lexically_normal() == old) {
+                ref = checked.value();
+                ++changed;
+            }
+        };
+        relink(t.outputLut);
+        for (auto& track : t.tracks) {
+            for (auto& clip : track.clips) {
+                relink(clip.grade.lut);
+                for (auto& v : clip.gradeVersions) relink(v.grade.lut);
+            }
+        }
+        if (changed == 0) {
+            return makeError(ErrorCode::NotFound, "color", "No grade uses the LUT '" + old.filename().string() + "'.");
+        }
+        return Status::success();
+    });
+    if (!s.ok()) return s.error();
+    return changed;
+}
+
+std::vector<fs::path> EditorSession::missingLuts() const {
+    std::vector<fs::path> out;
+    for (const auto& path : render::lutsUsedBy(timeline())) {
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec)) out.push_back(path);
+    }
+    return out;
+}
+
+namespace {
+
+Status checkVersionName(const std::string& name) {
+    if (name.empty() || name.size() > 64) {
+        return makeError(ErrorCode::InvalidArgument, "color", "A grade version needs a name of 1 to 64 characters.");
+    }
+    return Status::success();
+}
+
+}  // namespace
+
+Status EditorSession::addGradeVersion(const std::string& clipId, const std::string& name) {
+    UP_TRY(checkVersionName(name));
+    return editTimeline("New Grade Version", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        Clip& clip = *c.value();
+        const bool taken = name == clip.gradeVersion ||
+                           std::any_of(clip.gradeVersions.begin(), clip.gradeVersions.end(),
+                                       [&](const NamedGrade& v) { return v.name == name; });
+        if (taken) return makeError(ErrorCode::Conflict, "color", "This clip already has a grade version called '" + name + "'.");
+        clip.gradeVersions.push_back(NamedGrade{clip.gradeVersion, clip.grade});
+        clip.gradeVersion = name;
+        return Status::success();
+    });
+}
+
+Status EditorSession::selectGradeVersion(const std::string& clipId, const std::string& name) {
+    return editTimeline("Switch Grade Version", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        Clip& clip = *c.value();
+        if (name == clip.gradeVersion) return Status::success();
+        auto it = std::find_if(clip.gradeVersions.begin(), clip.gradeVersions.end(),
+                               [&](const NamedGrade& v) { return v.name == name; });
+        if (it == clip.gradeVersions.end()) return makeError(ErrorCode::NotFound, "color", "There is no grade version called '" + name + "'.");
+        std::swap(it->grade, clip.grade);
+        std::swap(it->name, clip.gradeVersion);
+        return Status::success();
+    });
+}
+
+Status EditorSession::deleteGradeVersion(const std::string& clipId, const std::string& name) {
+    return editTimeline("Delete Grade Version", [&](Timeline& t) -> Status {
+        auto c = gradeTarget(t, clipId, std::nullopt);
+        if (!c.ok()) return c.error();
+        Clip& clip = *c.value();
+        if (name == clip.gradeVersion) {
+            return makeError(ErrorCode::InvalidArgument, "color", "The active grade version cannot be deleted.",
+                             "Switch to another version first.");
+        }
+        const auto before = clip.gradeVersions.size();
+        std::erase_if(clip.gradeVersions, [&](const NamedGrade& v) { return v.name == name; });
+        if (clip.gradeVersions.size() == before) {
+            return makeError(ErrorCode::NotFound, "color", "There is no grade version called '" + name + "'.");
+        }
         return Status::success();
     });
 }

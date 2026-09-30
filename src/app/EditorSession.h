@@ -162,6 +162,25 @@ public:
     Status copyGrade(const std::string& clipId);
     Status pasteGrade(const std::vector<std::string>& clipIds);
     bool hasCopiedGrade() const { return gradeClipboard_.has_value(); }
+    // Replaces one curve (validated and sorted; empty = identity/neutral).
+    Status setGradeCurve(const std::string& clipId, CurveKind kind, std::vector<CurvePoint> points);
+    // Sets (after checking the file loads as a .cube LUT) or clears a clip's LUT.
+    Status setGradeLut(const std::string& clipId, const std::optional<std::filesystem::path>& lutFile);
+    Status setGradeBypass(const std::string& clipId, bool bypass);
+    // Timeline-wide: an output LUT on the composited picture, and bypassing every clip grade.
+    Status setOutputLut(const std::optional<std::filesystem::path>& lutFile);
+    Status setGradesBypassed(bool bypassed);
+    // Points every reference to `oldPath` (clip grades, stored versions, output LUT) at
+    // `newPath`, which must load. Returns how many references changed.
+    Result<int> relinkLut(const std::filesystem::path& oldPath, const std::filesystem::path& newPath);
+    // LUT files the timeline references that do not exist on disk.
+    std::vector<std::filesystem::path> missingLuts() const;
+    // Grade versions: `addGradeVersion` stores the active grade under its name and
+    // starts a new active version `name` as a copy of it; `selectGradeVersion` swaps
+    // the active grade with a stored one; the active version cannot be deleted.
+    Status addGradeVersion(const std::string& clipId, const std::string& name);
+    Status selectGradeVersion(const std::string& clipId, const std::string& name);
+    Status deleteGradeVersion(const std::string& clipId, const std::string& name);
 
     // --- Track audio effects (audio tracks only; one undo step each) ----------------------
     Result<std::string> addTrackEffect(const std::string& trackId, const std::string& type);

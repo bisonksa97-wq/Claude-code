@@ -17,6 +17,7 @@ up_add_test(unit_tests
     unit/CacheJobsTest.cpp
     unit/ColorTest.cpp
     unit/CoreTest.cpp
+    unit/CurvesLutTest.cpp
     unit/CommandStackTest.cpp
     unit/ThreePointEditTest.cpp
     unit/TimelineOpsTest.cpp

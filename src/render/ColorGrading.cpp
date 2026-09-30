@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+#include <optional>
+
+#include "render/ColorCurves.h"
 
 namespace up::render {
 namespace {
@@ -73,25 +77,74 @@ double gradeChannel(const GradeValues& g, int channel, double encoded) {
     return v;
 }
 
-void applyGrade(VideoFrame& frame, const GradeValues& g) {
-    if (frame.empty() || g.isIdentity()) return;
-    std::array<std::array<float, 256>, 3> lut{};
-    for (int c = 0; c < 3; ++c)
-        for (int i = 0; i < 256; ++i) lut[c][i] = static_cast<float>(gradeChannel(g, c, i / 255.0));
+void applyGrade(VideoFrame& frame, const GradeValues& g, const GradeCurves& curves, const Lut* lut) {
+    if (frame.empty()) return;
+    auto curve = [&](CurveKind k) { return CurveEvaluator(k, curves[static_cast<std::size_t>(k)]); };
+    const CurveEvaluator master = curve(CurveKind::Master);
+    const std::array<CurveEvaluator, 3> channelCurves = {curve(CurveKind::Red), curve(CurveKind::Green), curve(CurveKind::Blue)};
+    const CurveEvaluator hueVsHue = curve(CurveKind::HueVsHue);
+    const CurveEvaluator hueVsSat = curve(CurveKind::HueVsSat);
+    const CurveEvaluator lumVsSat = curve(CurveKind::LumVsSat);
+    const bool toneCurves = !master.isIdentity() || !channelCurves[0].isIdentity() || !channelCurves[1].isIdentity() ||
+                            !channelCurves[2].isIdentity();
+    const bool hueCurves = !hueVsHue.isIdentity() || !hueVsSat.isIdentity();
     const float saturation = static_cast<float>(g[GradeParam::Saturation]);
+    const bool chroma = saturation != 1.0f || hueCurves || !lumVsSat.isIdentity();
+    if (g.isIdentity() && !toneCurves && !chroma && !lut) return;
+
+    std::array<std::array<float, 256>, 3> table{};
+    for (int c = 0; c < 3; ++c) {
+        for (int i = 0; i < 256; ++i) {
+            double v = gradeChannel(g, c, i / 255.0);
+            if (toneCurves) v = channelCurves[static_cast<std::size_t>(c)](master(v));  // curves work on 0..1
+            table[static_cast<std::size_t>(c)][static_cast<std::size_t>(i)] = static_cast<float>(v);
+        }
+    }
     for (std::size_t i = 0; i + 3 < frame.pixels.size(); i += 4) {
-        float r = lut[0][frame.pixels[i]];
-        float gr = lut[1][frame.pixels[i + 1]];
-        float b = lut[2][frame.pixels[i + 2]];
-        if (saturation != 1.0f) {
+        float r = table[0][frame.pixels[i]];
+        float gr = table[1][frame.pixels[i + 1]];
+        float b = table[2][frame.pixels[i + 2]];
+        if (chroma) {
             const auto y = static_cast<float>(kLumaR * r + kLumaG * gr + kLumaB * b);
-            r = y + (r - y) * saturation;
-            gr = y + (gr - y) * saturation;
-            b = y + (b - y) * saturation;
+            float cb = (b - y) / 1.8556f;
+            float cr = (r - y) / 1.5748f;
+            double scale = saturation;
+            if (!lumVsSat.isIdentity()) scale *= 2.0 * lumVsSat(y);
+            if (hueCurves && (cb != 0.0f || cr != 0.0f)) {
+                const double hue = hueOf(cb, cr);
+                if (!hueVsSat.isIdentity()) scale *= 2.0 * hueVsSat(hue);
+                if (!hueVsHue.isIdentity()) {
+                    const double turn = (hueVsHue(hue) - 0.5) * 2.0 * std::numbers::pi;
+                    const double c = std::cos(turn), s = std::sin(turn);
+                    const double rb = cb * c - cr * s;
+                    const double rr = cb * s + cr * c;
+                    cb = static_cast<float>(rb);
+                    cr = static_cast<float>(rr);
+                }
+            }
+            cb *= static_cast<float>(scale);
+            cr *= static_cast<float>(scale);
+            r = y + 1.5748f * cr;
+            b = y + 1.8556f * cb;
+            gr = static_cast<float>((y - kLumaR * r - kLumaB * b) / kLumaG);
+        }
+        if (lut) {
+            const auto out = lut->apply(r, gr, b);
+            r = out[0];
+            gr = out[1];
+            b = out[2];
         }
         frame.pixels[i] = static_cast<uint8_t>(std::lround(std::clamp(r, 0.0f, 1.0f) * 255.0f));
         frame.pixels[i + 1] = static_cast<uint8_t>(std::lround(std::clamp(gr, 0.0f, 1.0f) * 255.0f));
         frame.pixels[i + 2] = static_cast<uint8_t>(std::lround(std::clamp(b, 0.0f, 1.0f) * 255.0f));
+    }
+}
+
+void applyLut(VideoFrame& frame, const Lut& lut) {
+    for (std::size_t i = 0; i + 3 < frame.pixels.size(); i += 4) {
+        const auto out = lut.apply(frame.pixels[i] / 255.0f, frame.pixels[i + 1] / 255.0f, frame.pixels[i + 2] / 255.0f);
+        for (int c = 0; c < 3; ++c)
+            frame.pixels[i + static_cast<std::size_t>(c)] = static_cast<uint8_t>(std::lround(std::clamp(out[static_cast<std::size_t>(c)], 0.0f, 1.0f) * 255.0f));
     }
 }
 

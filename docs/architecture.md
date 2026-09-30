@@ -14,14 +14,14 @@ Dependencies only point downward.
 | project | `up_project` | Project model (media pool, bins, timelines), `.uproj` serializer and migrations | core, timeline |
 | codec | `up_codec` | FFmpeg wrappers: probe, `VideoDecoder`, `AudioDecoder`, `MediaWriter` | core, FFmpeg |
 | media | `up_media` | Import, offline detection, relink validation, search, synthetic test media, thumbnail/waveform generators and formats | core, project, codec |
-| render | `up_render` | `FrameCompositor`, colour grading (`applyGrade`), `computeScopes`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
+| render | `up_render` | `FrameCompositor`, colour grading (`applyGrade`, curves, `.cube` LUTs with `LutCache`), `computeScopes`, `AudioMixer`, `DecoderPool`, `ExportJob` | core, timeline, project, codec |
 | playback | `up_playback` | `PlaybackEngine` (real-time A/V playback), `AudioOutput`/`Clock` interfaces, `SampleFifo` | core, project, render |
 | app | `up_app` | `EditorSession` application services and undoable project commands; `MediaAssets` (async thumbnails and waveforms); `makeSourceProject` (one-clip projects for the source monitor) | all of the above |
 | cli | `ultimatepost` | Command-line front end | app |
 | ui | `up_ui`, `ultimatepost-studio` | Qt Widgets front end; `QtAudioOutput` adapter (Qt Multimedia, optional) | app, playback, Qt 6 |
 
 The conceptual engines from the master prompt map onto modules as they are built.
-Today: Project, Media, Timeline, Codec, Video (CPU compositor, primary colour grading, scopes), Audio (mixer, playback), Render and UI exist.
+Today: Project, Media, Timeline, Codec, Video (CPU compositor, colour grading with curves and LUTs, scopes), Audio (mixer, playback), Render and UI exist.
 The rest are listed in [roadmap.md](roadmap.md).
 
 ## Key design rules

@@ -3,6 +3,7 @@
 #include <array>
 
 #include "codec/VideoFrame.h"
+#include "render/Lut.h"
 #include "timeline/Grade.h"
 
 namespace up::render {
@@ -27,8 +28,18 @@ double linearToSrgb(double linear);
 // input value 0..1, returned unclamped. Exposed for tests.
 double gradeChannel(const GradeValues& g, int channel, double encoded);
 
-// Applies the grade in place. Per-channel operations run through 256-entry lookup
-// tables built for this call (exact for 8-bit input); saturation is applied after.
-void applyGrade(VideoFrame& frame, const GradeValues& grade);
+using GradeCurves = std::array<std::vector<CurvePoint>, kCurveKindCount>;
+
+// Applies a grade in place, in this order:
+//   1. primaries (gradeChannel) then the master and per-channel tone curves, as
+//      256-entry per-channel tables built for this call (exact for 8-bit input);
+//   2. per pixel, in Rec.709 Y/Cb/Cr: saturation, lum-vs-sat, hue-vs-sat and
+//      hue-vs-hue (luma is preserved);
+//   3. the LUT, if any;
+// and the result is clamped and quantised to 8 bits once, at the end.
+void applyGrade(VideoFrame& frame, const GradeValues& grade, const GradeCurves& curves = {}, const Lut* lut = nullptr);
+
+// Applies a LUT to every pixel (timeline output LUT). Alpha is unchanged.
+void applyLut(VideoFrame& frame, const Lut& lut);
 
 }  // namespace up::render

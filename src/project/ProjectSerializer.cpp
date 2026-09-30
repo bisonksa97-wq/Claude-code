@@ -132,7 +132,32 @@ std::optional<Transition> transitionFromJson(const json& j, const char* key) {
 }
 
 // Grade parameters, written like the transform: only non-default values.
-json gradeToJson(const ClipGrade& g) {
+json lutToJson(const std::optional<LutRef>& lut, const fs::path& baseDir) {
+    if (!lut) return nullptr;
+    fs::path rel = lut->relativePath;
+    if (!baseDir.empty() && !lut->path.empty()) {
+        std::error_code ec;
+        rel = fs::relative(lut->path, baseDir, ec);
+        if (ec) rel.clear();
+    }
+    return json{{"path", pathToUtf8(lut->path)}, {"relativePath", pathToUtf8(rel)}};
+}
+
+// LUTs resolve like media: the absolute path if it exists, else relative to the project.
+std::optional<LutRef> lutFromJson(const json& j, const char* key, const fs::path& baseDir) {
+    if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+    LutRef ref;
+    ref.path = pathFromUtf8(j.at(key).value("path", ""));
+    ref.relativePath = pathFromUtf8(j.at(key).value("relativePath", ""));
+    std::error_code ec;
+    if (!baseDir.empty() && !ref.relativePath.empty() && !fs::is_regular_file(ref.path, ec)) {
+        const fs::path candidate = (baseDir / ref.relativePath).lexically_normal();
+        if (fs::is_regular_file(candidate, ec)) ref.path = candidate;
+    }
+    return ref;
+}
+
+json gradeToJson(const ClipGrade& g, const fs::path& baseDir) {
     json out = json::object();
     for (std::size_t i = 0; i < kGradeParamCount; ++i) {
         const auto p = static_cast<GradeParam>(i);
@@ -143,10 +168,19 @@ json gradeToJson(const ClipGrade& g) {
             keys.push_back(json{{"frame", k.frame}, {"value", k.value}, {"interpolation", toString(k.interpolation)}});
         out[gradeInfo(p).id] = json{{"value", v.value}, {"keys", keys}};
     }
+    json curves = json::object();
+    for (std::size_t i = 0; i < kCurveKindCount; ++i) {
+        if (g.curves[i].empty()) continue;
+        json points = json::array();
+        for (const auto& pt : g.curves[i]) points.push_back(json::array({pt.x, pt.y}));
+        curves[curveId(static_cast<CurveKind>(i))] = points;
+    }
+    if (!curves.empty()) out["curves"] = curves;
+    if (g.lut) out["lut"] = lutToJson(g.lut, baseDir);
     return out;
 }
 
-ClipGrade gradeFromJson(const json& j) {
+ClipGrade gradeFromJson(const json& j, const fs::path& baseDir) {
     ClipGrade g;
     for (std::size_t i = 0; i < kGradeParamCount; ++i) {
         const auto p = static_cast<GradeParam>(i);
@@ -158,19 +192,29 @@ ClipGrade gradeFromJson(const json& j) {
             v.setKey(kj.at("frame").get<FrameIndex>(), kj.at("value").get<double>(),
                      interpolationFromString(kj.value("interpolation", "linear")).value_or(Interpolation::Linear));
     }
+    const json curves = j.value("curves", json::object());
+    for (const auto& [id, points] : curves.items()) {
+        const auto kind = curveKindFromString(id);
+        if (!kind) continue;  // unknown curves from newer builds are ignored
+        for (const auto& pt : points) g.curve(*kind).push_back(CurvePoint{pt.at(0).get<double>(), pt.at(1).get<double>()});
+    }
+    g.lut = lutFromJson(j, "lut", baseDir);
     return g;
 }
 
-json toJson(const Clip& c) {
+json toJson(const Clip& c, const fs::path& baseDir) {
+    json versions = json::array();
+    for (const auto& v : c.gradeVersions) versions.push_back(json{{"name", v.name}, {"grade", gradeToJson(v.grade, baseDir)}});
     return json{{"id", c.id},         {"mediaId", c.mediaId},   {"name", c.name},
                 {"start", c.start},   {"duration", c.duration}, {"sourceIn", c.sourceIn},
                 {"sourceLength", c.sourceLength}, {"linkId", c.linkId}, {"enabled", c.enabled},
                 {"gainDb", c.gainDb}, {"markers", toJson(c.markers)}, {"transform", toJson(c.transform)},
                 {"transitionIn", toJson(c.transitionIn)}, {"transitionOut", toJson(c.transitionOut)},
-                {"grade", gradeToJson(c.grade)}};
+                {"grade", gradeToJson(c.grade, baseDir)}, {"gradeBypass", c.gradeBypass},
+                {"gradeVersion", c.gradeVersion}, {"gradeVersions", versions}};
 }
 
-Clip clipFromJson(const json& j) {
+Clip clipFromJson(const json& j, const fs::path& baseDir) {
     Clip c;
     c.id = j.at("id").get<std::string>();
     c.mediaId = j.value("mediaId", "");
@@ -186,13 +230,17 @@ Clip clipFromJson(const json& j) {
     c.transform = transformFromJson(j.value("transform", json::object()));
     c.transitionIn = transitionFromJson(j, "transitionIn");
     c.transitionOut = transitionFromJson(j, "transitionOut");
-    c.grade = gradeFromJson(j.value("grade", json::object()));
+    c.grade = gradeFromJson(j.value("grade", json::object()), baseDir);
+    c.gradeBypass = j.value("gradeBypass", false);
+    c.gradeVersion = j.value("gradeVersion", "A");
+    for (const auto& vj : j.value("gradeVersions", json::array()))
+        c.gradeVersions.push_back(NamedGrade{vj.value("name", ""), gradeFromJson(vj.value("grade", json::object()), baseDir)});
     return c;
 }
 
-json toJson(const Track& t) {
+json toJson(const Track& t, const fs::path& baseDir) {
     json clips = json::array();
-    for (const auto& c : t.clips) clips.push_back(toJson(c));
+    for (const auto& c : t.clips) clips.push_back(toJson(c, baseDir));
     json effects = json::array();
     for (const auto& fx : t.effects)
         effects.push_back(json{{"id", fx.id}, {"type", fx.type}, {"enabled", fx.enabled}, {"params", fx.params}});
@@ -202,7 +250,7 @@ json toJson(const Track& t) {
                 {"effects", effects}, {"clips", clips}};
 }
 
-Track trackFromJson(const json& j) {
+Track trackFromJson(const json& j, const fs::path& baseDir) {
     Track t;
     t.id = j.at("id").get<std::string>();
     t.kind = j.at("kind").get<std::string>() == "audio" ? TrackKind::Audio : TrackKind::Video;
@@ -221,13 +269,13 @@ Track trackFromJson(const json& j) {
         fx.params = fj.value("params", std::map<std::string, double>{});
         t.effects.push_back(std::move(fx));
     }
-    for (const auto& c : j.value("clips", json::array())) t.clips.push_back(clipFromJson(c));
+    for (const auto& c : j.value("clips", json::array())) t.clips.push_back(clipFromJson(c, baseDir));
     return t;
 }
 
-json toJson(const Timeline& t) {
+json toJson(const Timeline& t, const fs::path& baseDir) {
     json tracks = json::array();
-    for (const auto& tr : t.tracks) tracks.push_back(toJson(tr));
+    for (const auto& tr : t.tracks) tracks.push_back(toJson(tr, baseDir));
     return json{{"id", t.id},
                 {"name", t.name},
                 {"frameRate", t.frameRate.toString()},
@@ -238,10 +286,12 @@ json toJson(const Timeline& t) {
                 {"markOut", optionalToJson(t.markOut)},
                 {"targets", {{"video", t.videoTarget}, {"audio", t.audioTarget}}},
                 {"markers", toJson(t.markers)},
+                {"outputLut", lutToJson(t.outputLut, baseDir)},
+                {"gradesBypassed", t.gradesBypassed},
                 {"tracks", tracks}};
 }
 
-Timeline timelineFromJson(const json& j) {
+Timeline timelineFromJson(const json& j, const fs::path& baseDir) {
     Timeline t;
     t.id = j.at("id").get<std::string>();
     t.name = j.value("name", "");
@@ -249,13 +299,15 @@ Timeline timelineFromJson(const json& j) {
     t.width = j.value("width", 1920);
     t.height = j.value("height", 1080);
     t.sampleRate = j.value("sampleRate", 48000);
-    for (const auto& tr : j.value("tracks", json::array())) t.tracks.push_back(trackFromJson(tr));
+    for (const auto& tr : j.value("tracks", json::array())) t.tracks.push_back(trackFromJson(tr, baseDir));
     t.markIn = optionalFromJson<FrameIndex>(j, "markIn");
     t.markOut = optionalFromJson<FrameIndex>(j, "markOut");
     const json targets = j.value("targets", json::object());
     t.videoTarget = targets.value("video", "");
     t.audioTarget = targets.value("audio", "");
     t.markers = markersFromJson(j.value("markers", json::array()));
+    t.outputLut = lutFromJson(j, "outputLut", baseDir);
+    t.gradesBypassed = j.value("gradesBypassed", false);
     return t;
 }
 
@@ -287,7 +339,7 @@ std::string ProjectSerializer::toJson(const Project& p, const fs::path& projectF
     json bins = json::array();
     for (const auto& b : p.bins) bins.push_back(json{{"id", b.id}, {"name", b.name}, {"parentId", b.parentId}});
     json timelines = json::array();
-    for (const auto& t : p.timelines) timelines.push_back(::up::toJson(t));
+    for (const auto& t : p.timelines) timelines.push_back(::up::toJson(t, baseDir));
 
     json doc{{"format", "ultimatepost.project"},
              {"formatVersion", Project::kFormatVersion},
@@ -348,7 +400,7 @@ Result<Project> ProjectSerializer::fromJson(const std::string& text, const fs::p
             p.media.push_back(std::move(m));
         }
         for (const auto& tj : doc.value("timelines", json::array())) {
-            Timeline t = timelineFromJson(tj);
+            Timeline t = timelineFromJson(tj, projectFile.empty() ? fs::path() : fs::absolute(projectFile).parent_path());
             UP_TRY(t.validate());
             p.timelines.push_back(std::move(t));
         }

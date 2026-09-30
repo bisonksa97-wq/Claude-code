@@ -1,7 +1,11 @@
 #pragma once
 
 #include "codec/VideoFrame.h"
+#include <set>
+#include <vector>
+
 #include "core/Result.h"
+#include "render/Lut.h"
 #include "render/MediaSource.h"
 #include "timeline/Timeline.h"
 
@@ -21,6 +25,11 @@ struct Layer;
 // exact even over lower tracks. Layers under a fully opaque, frame-covering layer are
 // skipped. Offline media renders as a layer of the offline colour so problems are
 // visible rather than silently black.
+//
+// Each clip's grade (unless bypassed on the clip or the timeline) is applied to the
+// decoded source before its transform; the timeline's output LUT is applied to the
+// finished picture. A LUT file that cannot be loaded is skipped with a logged warning
+// (see checkTimelineLuts, which export uses to refuse such timelines).
 class FrameCompositor {
 public:
     explicit FrameCompositor(MediaResolver resolver, std::size_t decoderCapacity = 16);
@@ -34,8 +43,19 @@ public:
 private:
     Status drawLayer(VideoFrame& canvas, const detail::Layer& layer, const Timeline& timeline, FrameIndex frame);
 
+    const Lut* lut(const std::optional<LutRef>& ref);
+
     MediaResolver resolver_;
     DecoderPool pool_;
+    LutCache luts_;
+    std::set<std::filesystem::path> reportedLutFailures_;
 };
+
+// Every LUT file the timeline uses (clip grades, including stored versions, and the
+// output LUT), without duplicates.
+std::vector<std::filesystem::path> lutsUsedBy(const Timeline& timeline);
+// Fails with the first LUT that would render (the output LUT and active, unbypassed
+// clip grades) but cannot be loaded (missing or malformed file).
+Status checkTimelineLuts(const Timeline& timeline);
 
 }  // namespace up::render

@@ -1,6 +1,6 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **7**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **8**, `Project::kFormatVersion`).
 
 ```jsonc
 {
@@ -30,6 +30,8 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
       "targets": { "video": "<track id>", "audio": "" },  // source patching; "" = stream disabled
       "markers": [ { "id": "…", "frame": 25, "duration": 0, "name": "Scene 2",
                      "comment": "", "color": "yellow" } ],  // timeline frames, sorted
+      "outputLut": null,                                // or { "path": …, "relativePath": … }
+      "gradesBypassed": false,
       "tracks": [ {
           "id": "…", "kind": "video" | "audio", "name": "V1",
           "enabled": true, "locked": false, "muted": false, "solo": false, "gainDb": 0,
@@ -47,7 +49,13 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
                            { "frame": 40, "value": 100, "interpolation": "linear" } ] } },
                        "grade": {                              // video clips; only non-default parameters
                          "saturation": { "value": 0.5, "keys": [] },
-                         "gainR": { "value": 1.2, "keys": [ { "frame": 10, "value": 1.2, "interpolation": "linear" } ] } },
+                         "gainR": { "value": 1.2, "keys": [ { "frame": 10, "value": 1.2, "interpolation": "linear" } ] },
+                         "curves": { "master": [[0, 0.05], [1, 0.95]],       // only non-empty curves; [x, y] 0..1
+                                     "hueVsSat": [[0.35, 0.2]] },
+                         "lut": { "path": "/looks/film.cube", "relativePath": "../looks/film.cube" } },
+                       "gradeBypass": false,
+                       "gradeVersion": "B",                    // name of the active grade above
+                       "gradeVersions": [ { "name": "A", "grade": { … } } ],   // stored, inactive versions
                        "transitionIn": { "kind": "dissolve", "duration": 25, "alignment": "center" },
                        "transitionOut": null } ]
       } ]
@@ -80,6 +88,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 | 5 | Clip `transitionIn` / `transitionOut` | Both null on every clip. Covered by `ProjectFormat.RoundTripsTransitionsAndMigratesV4`. |
 | 6 | Track `pan` and `effects`; clip `transform` may hold `volume` (dB) and `pan` | Pan 0 and an empty effect chain on every track. Covered by `ProjectFormat.RoundTripsTrackAudioAndMigratesV5`. Invalid effect parameters in a file are rejected on load. |
 | 7 | Clip `grade` (primary colour correction: lift/gamma/gain/offset master and RGB, contrast, pivot, saturation, exposure, temperature, tint; all animatable) | An empty grade object (identity) on every clip. Covered by `ProjectFormat.MigratesV6ToGrades`. Parameter ids are listed in `timeline/Grade.cpp`. Unknown ids are ignored, non-finite values are rejected on load, and out-of-range values are clamped when rendering. |
+| 8 | Grade `curves` and `lut` (inside `grade`); clip `gradeBypass`, `gradeVersion`, `gradeVersions`; timeline `outputLut`, `gradesBypassed` | Bypass off, one active version named "A" with no stored versions, no output LUT (curves and LUT are simply absent). Covered by `ProjectFormat.RoundTripsCurvesLutsVersionsAndMigratesV7`. Curves must be valid (points in 0..1, distinct x, sorted, tone curves ≥ 2 points) and version names unique per clip, or the file is rejected. LUT paths resolve like media paths: absolute first, then relative to the project file. |
 
 ## Safety
 

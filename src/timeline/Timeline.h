@@ -76,6 +76,11 @@ struct Clip {
     std::vector<Marker> markers;  // source-frame positions
     ClipTransform transform;      // keyframes in source frames
     ClipGrade grade;              // video clips only; keyframes in source frames
+    bool gradeBypass = false;     // render without the grade (kept for comparison)
+    // Grade versions: `grade` is the active version named `gradeVersion`; the
+    // others are stored in `gradeVersions` (names unique per clip).
+    std::string gradeVersion = "A";
+    std::vector<NamedGrade> gradeVersions;
     std::optional<Transition> transitionIn;
     std::optional<Transition> transitionOut;
 
@@ -125,6 +130,10 @@ public:
     std::string videoTarget;
     std::string audioTarget;
     std::vector<Marker> markers;  // sorted by frame
+    // Colour: a LUT applied to the composited picture (viewing/delivery transform),
+    // and a switch that renders every clip without its grade.
+    std::optional<LutRef> outputLut;
+    bool gradesBypassed = false;
 
     // Creates a timeline with `videoTracks` video and `audioTracks` audio tracks.
     static Timeline create(std::string name, FrameRate rate, int width, int height, int sampleRate,

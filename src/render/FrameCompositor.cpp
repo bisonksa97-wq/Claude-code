@@ -119,8 +119,11 @@ Status FrameCompositor::drawLayer(VideoFrame& canvas, const Layer& l, const Time
         image = VideoFrame(dw, dh);
         image.fill(kOfflineColor[0], kOfflineColor[1], kOfflineColor[2]);
     } else {
-        // Primary grade on the source picture, before it is transformed and composited.
-        applyGrade(image, evaluateGrade(l.clip->grade, l.clip->toSource(frame)));
+        // Grade the source picture, before it is transformed and composited.
+        if (!timeline.gradesBypassed && !l.clip->gradeBypass && !l.clip->grade.isIdentity()) {
+            applyGrade(image, evaluateGrade(l.clip->grade, l.clip->toSource(frame)), l.clip->grade.curves,
+                       lut(l.clip->grade.lut));
+        }
     }
     LayerPlacement placement;
     placement.centerX = outWidth / 2.0 + l.posX * outScale;
@@ -194,7 +197,52 @@ Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex 
         }
         mix(canvas, withOutgoing, withIncoming, transitions::videoWeights(region.kind, plan.frame.progress));
     }
+    if (const Lut* output = lut(timeline.outputLut)) applyLut(canvas, *output);
     return canvas;
+}
+
+const Lut* FrameCompositor::lut(const std::optional<LutRef>& ref) {
+    if (!ref) return nullptr;
+    auto loaded = luts_.get(ref->path);
+    if (!loaded.ok()) {
+        if (reportedLutFailures_.insert(ref->path).second) UP_LOG_WARN(log::sub::Render, loaded.error().toString());
+        return nullptr;
+    }
+    reportedLutFailures_.erase(ref->path);
+    return loaded.value().get();  // owned by the cache until the file changes
+}
+
+std::vector<std::filesystem::path> lutsUsedBy(const Timeline& timeline) {
+    std::vector<std::filesystem::path> out;
+    auto add = [&](const std::optional<LutRef>& ref) {
+        if (ref && std::find(out.begin(), out.end(), ref->path) == out.end()) out.push_back(ref->path);
+    };
+    add(timeline.outputLut);
+    for (const auto& track : timeline.tracks) {
+        for (const auto& clip : track.clips) {
+            add(clip.grade.lut);
+            for (const auto& v : clip.gradeVersions) add(v.grade.lut);
+        }
+    }
+    return out;
+}
+
+Status checkTimelineLuts(const Timeline& timeline) {
+    // Only what renders matters: the output LUT and the active, unbypassed grades.
+    std::vector<std::filesystem::path> paths;
+    if (timeline.outputLut) paths.push_back(timeline.outputLut->path);
+    for (const auto& track : timeline.tracks) {
+        if (track.kind != TrackKind::Video || timeline.gradesBypassed) continue;
+        for (const auto& clip : track.clips)
+            if (clip.grade.lut && !clip.gradeBypass) paths.push_back(clip.grade.lut->path);
+    }
+    std::sort(paths.begin(), paths.end());
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+    for (const auto& path : paths) {
+        auto lut = loadCubeLut(path);
+        if (!lut.ok()) return lut.error();
+    }
+    return Status::success();
 }
 
 }  // namespace up::render

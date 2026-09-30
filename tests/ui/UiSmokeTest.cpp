@@ -22,6 +22,9 @@
 #include <QDockWidget>
 #include <QSlider>
 
+#include <QCheckBox>
+#include <QComboBox>
+#include <QLabel>
 #include <QPushButton>
 
 #include "ui/ColorPanel.h"
@@ -626,6 +629,115 @@ TEST(Ui, ColorPanelGradesAndScopesFollow) {
     EXPECT_TRUE(tl.clip(blue)->grade.isIdentity());
     window.session()->undo();
     EXPECT_FALSE(tl.clip(blue)->grade.isIdentity());
+}
+
+TEST(Ui, ColorCurvesLutsVersionsAndBypass) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(200, 50, 50, 50));
+    const auto swapLut = dir / "swap.cube";
+    test::writeText(swapLut, test::cubeText(9, [](float r, float g, float b) { return std::array<float, 3>{g, b, r}; }));
+    const auto invertLut = dir / "invert.cube";
+    test::writeText(invertLut, test::cubeText(5, [](float r, float g, float b) { return std::array<float, 3>{1 - r, 1 - g, 1 - b}; }, false));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 1000);
+    auto session = EditorSession::createNew("Looks", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    window.findChild<QDockWidget*>("ColorDock")->raise();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    const std::string clip = tl.tracks[0].clips[0].id;
+    ui::ColorPanel* color = window.colorPanel();
+    window.timeline()->selectClip(QString::fromStdString(clip));
+    window.viewer()->setPosition(10);
+    auto centre = [&] {
+        QApplication::processEvents();
+        const QImage img = window.viewer()->currentImage();
+        return img.pixelColor(img.width() / 2, img.height() / 2);
+    };
+    const QColor original = centre();
+
+    // Red curve: the first click on an empty tone curve starts from the diagonal; dragging
+    // the white point down to 0.5 halves red, as one undo step.
+    color->curveSelector()->setCurrentIndex(static_cast<int>(CurveKind::Red));
+    ui::CurveEditor* editor = color->curveEditor();
+    ASSERT_GT(editor->width(), 50);
+    const QPoint white = editor->toWidget({1.0, 1.0}).toPoint();
+    const QPoint half = editor->toWidget({1.0, 0.5}).toPoint();
+    QTest::mousePress(editor, Qt::LeftButton, Qt::NoModifier, white);
+    QTest::mouseMove(editor, half);
+    QTest::mouseRelease(editor, Qt::LeftButton, Qt::NoModifier, half);
+    const auto& red = tl.clip(clip)->grade.curve(CurveKind::Red);
+    ASSERT_EQ(red.size(), 2u);
+    EXPECT_NEAR(red[1].y, 0.5, 0.02);
+    EXPECT_NEAR(centre().red(), original.red() / 2, 6);
+    // Right-clicking a point of a two-point tone curve returns it to the identity.
+    QTest::mouseClick(editor, Qt::RightButton, Qt::NoModifier, editor->toWidget(red[1]).toPoint());
+    EXPECT_TRUE(tl.clip(clip)->grade.curve(CurveKind::Red).empty());
+    window.session()->undo();
+    EXPECT_EQ(tl.clip(clip)->grade.curve(CurveKind::Red).size(), 2u);
+
+    // LUT: rotates the channels after the curve.
+    color->loadLut(QString::fromStdString(swapLut.string()));
+    EXPECT_EQ(color->lutLabel()->text(), "swap.cube");
+    const QColor swapped = centre();
+    EXPECT_NEAR(swapped.red(), original.green(), 6);
+    EXPECT_NEAR(swapped.blue(), original.red() / 2, 6);
+    color->loadLut(QString::fromStdString((dir / "red.mp4").string()));  // not a LUT
+    EXPECT_EQ(tl.clip(clip)->grade.lut->path, swapLut);
+
+    // Versions: New keeps A and continues on B; Reset Grade affects only B.
+    color->newVersionButton()->click();
+    EXPECT_EQ(tl.clip(clip)->gradeVersion, "B");
+    EXPECT_EQ(color->versionSelector()->count(), 2);
+    color->resetButton()->click();
+    EXPECT_NEAR(centre().red(), original.red(), 4);
+    emit color->versionSelector()->activated(color->versionSelector()->findText("A"));
+    EXPECT_EQ(tl.clip(clip)->gradeVersion, "A");
+    EXPECT_NEAR(centre().red(), swapped.red(), 4);
+    // Delete removes the version shown and switches to the stored one in one step.
+    color->deleteVersionButton()->click();
+    EXPECT_EQ(tl.clip(clip)->gradeVersion, "B");
+    EXPECT_TRUE(tl.clip(clip)->gradeVersions.empty());
+    window.session()->undo();
+    EXPECT_EQ(tl.clip(clip)->gradeVersion, "A");
+    EXPECT_EQ(tl.clip(clip)->gradeVersions.size(), 1u);
+
+    // Bypass: the clip toggle and Color ▸ Bypass All Grades.
+    color->bypassToggle()->click();
+    EXPECT_TRUE(tl.clip(clip)->gradeBypass);
+    EXPECT_NEAR(centre().red(), original.red(), 4);
+    color->bypassToggle()->click();
+    QAction* bypassAll = findAction(&window, "Bypass All Grades");
+    ASSERT_NE(bypassAll, nullptr);
+    bypassAll->trigger();
+    EXPECT_TRUE(tl.gradesBypassed);
+    EXPECT_TRUE(bypassAll->isChecked());
+    EXPECT_NEAR(centre().red(), original.red(), 4);
+    window.session()->undo();
+    EXPECT_FALSE(bypassAll->isChecked());
+
+    // Output LUT on the whole picture.
+    ASSERT_TRUE(window.setOutputLut(QString::fromStdString(invertLut.string())));
+    EXPECT_NEAR(centre().red(), 255 - swapped.red(), 6);
+    ASSERT_TRUE(window.setOutputLut({}));
+
+    if (const char* shot = std::getenv("UP_UI_SCREENSHOT_CURVES")) {
+        color->curveSelector()->setCurrentIndex(static_cast<int>(CurveKind::Red));
+        QApplication::processEvents();
+        window.grab().save(QString::fromLocal8Bit(shot));
+    }
+
+    // A LUT that disappears is flagged in the panel.
+    std::filesystem::rename(swapLut, dir / "gone.cube");
+    color->refresh();
+    EXPECT_TRUE(color->lutLabel()->text().contains("missing"));
+    EXPECT_EQ(window.session()->missingLuts().size(), 1u);
+    color->clearLutButton()->click();
+    EXPECT_FALSE(tl.clip(clip)->grade.lut.has_value());
 }
 
 TEST(Ui, AudioMixerStripsMetersAndEffects) {

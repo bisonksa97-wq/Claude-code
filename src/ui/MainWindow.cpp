@@ -342,6 +342,20 @@ void MainWindow::buildMenus() {
         }
         tx.commit();
     });
+    color->addSeparator();
+    bypassGradesAction_ = color->addAction(tr("Bypass All Grades"));
+    bypassGradesAction_->setCheckable(true);
+    bypassGradesAction_->setShortcut(QKeySequence("Shift+D"));
+    bypassGradesAction_->setToolTip(tr("Show and export every clip without its grade (the output LUT still applies)"));
+    connect(bypassGradesAction_, &QAction::triggered, this, [this](bool on) {
+        runEdit([&] { return session_->setGradesBypassed(on); });
+    });
+    add(color, tr("Set Output LUT…"), QKeySequence(), [this] {
+        const QString lut = QFileDialog::getOpenFileName(this, tr("Output LUT"), {}, tr("Cube LUTs (*.cube);;All files (*)"));
+        if (!lut.isEmpty()) setOutputLut(lut);
+    });
+    add(color, tr("Clear Output LUT"), QKeySequence(), [this] { setOutputLut({}); });
+    add(color, tr("Relink Missing LUTs…"), QKeySequence(), &MainWindow::relinkMissingLuts);
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     add(view, tr("Zoom In"), QKeySequence("="), [this] { timeline()->zoomIn(); });
@@ -374,6 +388,7 @@ void MainWindow::updateTitleAndActions() {
     undoAction_->setText(h.canUndo() ? tr("&Undo %1").arg(qs(h.undoName())) : tr("&Undo"));
     redoAction_->setEnabled(h.canRedo());
     redoAction_->setText(h.canRedo() ? tr("&Redo %1").arg(qs(h.redoName())) : tr("&Redo"));
+    bypassGradesAction_->setChecked(session_->timeline().gradesBypassed);
 }
 
 void MainWindow::showError(const QString& summary, const QString& details) {
@@ -581,7 +596,10 @@ bool MainWindow::exportTo(const QString& path, bool showProgress) {
         else statusBar()->showMessage(tr("Export cancelled"), 4000);
         return false;
     }
-    statusBar()->showMessage(tr("Exported %1").arg(path), 6000);
+    statusBar()->showMessage(session_->timeline().gradesBypassed
+                                 ? tr("Exported %1 with all grades bypassed (Color ▸ Bypass All Grades)").arg(path)
+                                 : tr("Exported %1").arg(path),
+                             6000);
     return true;
 }
 
@@ -871,6 +889,37 @@ void MainWindow::pasteGrade() {
     }
     Status s = session_->pasteGrade(clips);
     if (!s.ok()) statusBar()->showMessage(qs(s.error().message), 4000);
+}
+
+bool MainWindow::setOutputLut(const QString& path) {
+    Status s = session_->setOutputLut(path.isEmpty() ? std::nullopt : std::optional<std::filesystem::path>(path.toStdString()));
+    if (!s.ok()) {
+        showError(tr("The output LUT could not be set."), qs(s.error().toString()));
+        return false;
+    }
+    statusBar()->showMessage(path.isEmpty() ? tr("Output LUT removed") : tr("Output LUT: %1").arg(QFileInfo(path).fileName()), 4000);
+    return true;
+}
+
+void MainWindow::relinkMissingLuts() {
+    const auto missing = session_->missingLuts();
+    if (missing.empty()) {
+        statusBar()->showMessage(tr("Every LUT used by this timeline is available."), 4000);
+        return;
+    }
+    int relinked = 0;
+    for (const auto& path : missing) {
+        const QString name = qs(path.filename().string());
+        const QString file = QFileDialog::getOpenFileName(this, tr("Locate %1").arg(name), {}, tr("Cube LUTs (*.cube);;All files (*)"));
+        if (file.isEmpty()) continue;
+        auto r = session_->relinkLut(path, file.toStdString());
+        if (!r.ok()) {
+            showError(tr("%1 could not be relinked.").arg(name), qs(r.error().toString()));
+            continue;
+        }
+        ++relinked;
+    }
+    statusBar()->showMessage(tr("Relinked %1 of %2 missing LUT(s)").arg(relinked).arg(missing.size()), 5000);
 }
 
 }  // namespace up::ui

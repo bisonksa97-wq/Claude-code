@@ -534,3 +534,96 @@ TEST(Color, GradesRenderPersistAndCopy) {
               ErrorCode::InvalidArgument);
 }
 
+
+TEST(Color, CurvesLutsBypassAndVersions) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(200, 50, 50, 25));
+    const auto swapLut = dir / "swap.cube";
+    test::writeText(swapLut, test::cubeText(9, [](float r, float g, float b) { return std::array<float, 3>{g, b, r}; }));
+    const auto invertLut = dir / "invert.cube";
+    test::writeText(invertLut, test::cubeText(5, [](float r, float g, float b) { return std::array<float, 3>{1 - r, 1 - g, 1 - b}; }, false));
+    test::writeText(dir / "broken.cube", "LUT_3D_SIZE 2\n0 0 0\n");
+    auto session = EditorSession::createNew("Looks", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    const Timeline& tl = session->timeline();
+    const std::string clip = tl.tracks[0].clips[0].id;
+    const std::string other = tl.tracks[0].clips[1].id;
+    render::FrameCompositor compositor(render::resolverFor(session->project()));
+    auto colorAt = [&](FrameIndex f) { return test::averageColor(compositor.render(tl, f).value()); };
+    const auto original = colorAt(5);
+
+    // A red curve halving red.
+    ASSERT_TRUE(session->setGradeCurve(clip, CurveKind::Red, {{1, 0.5}, {0, 0}}).ok());
+    EXPECT_DOUBLE_EQ(tl.clip(clip)->grade.curve(CurveKind::Red)[0].x, 0.0);  // stored sorted
+    EXPECT_NEAR(colorAt(5).r, original.r / 2, 3);
+    EXPECT_FALSE(session->setGradeCurve(clip, CurveKind::Red, {{0.5, 0.5}}).ok());
+
+    // A LUT after the curve: channels rotate (r, g, b) -> (g, b, r).
+    ASSERT_TRUE(session->setGradeLut(clip, swapLut).ok());
+    auto swapped = colorAt(5);
+    EXPECT_NEAR(swapped.r, original.g, 3);
+    EXPECT_NEAR(swapped.b, original.r / 2, 3);
+    auto broken = session->setGradeLut(clip, dir / "broken.cube");
+    ASSERT_FALSE(broken.ok());
+    EXPECT_NE(broken.error().message.find("broken.cube"), std::string::npos);
+    EXPECT_EQ(tl.clip(clip)->grade.lut->path, swapLut);  // unchanged
+
+    // Bypass per clip and for the whole timeline (both undoable).
+    ASSERT_TRUE(session->setGradeBypass(clip, true).ok());
+    EXPECT_NEAR(colorAt(5).r, original.r, 2);
+    session->undo();
+    ASSERT_TRUE(session->setGradesBypassed(true).ok());
+    EXPECT_NEAR(colorAt(5).r, original.r, 2);
+    session->undo();
+    EXPECT_NEAR(colorAt(5).r, swapped.r, 2);
+
+    // An output LUT applies to the whole picture, after the clip grades.
+    ASSERT_TRUE(session->setOutputLut(invertLut).ok());
+    EXPECT_NEAR(colorAt(30).r, 255 - original.r, 3);
+    EXPECT_NEAR(colorAt(5).r, 255 - swapped.r, 3);
+    ASSERT_TRUE(session->setOutputLut(std::nullopt).ok());
+
+    // Versions: B starts as a copy of A; resetting B leaves A intact; switching back restores it.
+    ASSERT_TRUE(session->addGradeVersion(clip, "B").ok());
+    EXPECT_EQ(tl.clip(clip)->gradeVersion, "B");
+    EXPECT_NEAR(colorAt(5).r, swapped.r, 2);
+    ASSERT_TRUE(session->resetGrade(clip).ok());
+    EXPECT_NEAR(colorAt(5).r, original.r, 2);
+    EXPECT_EQ(session->addGradeVersion(clip, "A").error().code, ErrorCode::Conflict);
+    EXPECT_FALSE(session->deleteGradeVersion(clip, "B").ok());  // active
+    ASSERT_TRUE(session->selectGradeVersion(clip, "A").ok());
+    EXPECT_NEAR(colorAt(5).r, swapped.r, 2);
+    ASSERT_EQ(tl.clip(clip)->gradeVersions.size(), 1u);
+    EXPECT_EQ(tl.clip(clip)->gradeVersions[0].name, "B");
+    ASSERT_TRUE(session->deleteGradeVersion(clip, "B").ok());
+    session->undo();
+    EXPECT_EQ(tl.clip(clip)->gradeVersions.size(), 1u);
+
+    // Paste carries curves and the LUT.
+    ASSERT_TRUE(session->copyGrade(clip).ok());
+    ASSERT_TRUE(session->pasteGrade({other}).ok());
+    EXPECT_NEAR(colorAt(30).r, swapped.r, 3);
+
+    // A missing LUT: listed, skipped when viewing, refused by export; relinking fixes it.
+    const auto movedLut = dir / "moved" / "swap.cube";
+    std::filesystem::create_directories(movedLut.parent_path());
+    std::filesystem::rename(swapLut, movedLut);
+    EXPECT_EQ(session->missingLuts(), std::vector<std::filesystem::path>{swapLut});
+    render::FrameCompositor fresh(render::resolverFor(session->project()));
+    EXPECT_NEAR(test::averageColor(fresh.render(tl, 5).value()).r, original.r / 2, 3);  // curve only
+    render::ExportOptions options;
+    options.output = dir / "out.mp4";
+    auto exported = render::ExportJob(session->project(), tl.id, options).run();
+    ASSERT_FALSE(exported.ok());
+    EXPECT_NE(exported.error().message.find("swap.cube"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(options.output));
+    auto relinked = session->relinkLut(swapLut, movedLut);
+    ASSERT_TRUE(relinked.ok()) << relinked.error().toString();
+    EXPECT_EQ(relinked.value(), 2);  // both clips (version B was reset, so it has no LUT)
+    EXPECT_TRUE(session->missingLuts().empty());
+    EXPECT_FALSE(session->relinkLut(swapLut, movedLut).ok());  // nothing uses the old path now
+    EXPECT_TRUE(render::checkTimelineLuts(tl).ok());
+    EXPECT_NEAR(colorAt(5).r, swapped.r, 2);
+}

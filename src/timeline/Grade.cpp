@@ -1,5 +1,8 @@
 #include "timeline/Grade.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace up {
 
 const GradeParamInfo& gradeInfo(GradeParam param) {
@@ -42,7 +45,51 @@ std::array<AnimatedValue, kGradeParamCount> ClipGrade::defaults() {
     return out;
 }
 
+namespace {
+
+struct CurveInfo {
+    const char* id;
+    const char* label;
+};
+
+constexpr std::array<CurveInfo, kCurveKindCount> kCurves = {{
+    {"master", "Master"}, {"red", "Red"}, {"green", "Green"}, {"blue", "Blue"},
+    {"hueVsHue", "Hue vs Hue"}, {"hueVsSat", "Hue vs Sat"}, {"lumVsSat", "Lum vs Sat"},
+}};
+
+}  // namespace
+
+const char* curveId(CurveKind kind) { return kCurves[static_cast<std::size_t>(kind)].id; }
+const char* curveLabel(CurveKind kind) { return kCurves[static_cast<std::size_t>(kind)].label; }
+
+std::optional<CurveKind> curveKindFromString(const std::string& id) {
+    for (std::size_t i = 0; i < kCurveKindCount; ++i)
+        if (id == kCurves[i].id) return static_cast<CurveKind>(i);
+    return std::nullopt;
+}
+
+bool isHueCurve(CurveKind kind) { return kind == CurveKind::HueVsHue || kind == CurveKind::HueVsSat; }
+bool isToneCurve(CurveKind kind) { return static_cast<int>(kind) <= static_cast<int>(CurveKind::Blue); }
+
+std::optional<std::string> validateCurve(CurveKind kind, std::vector<CurvePoint>& points) {
+    if (points.size() > kMaxCurvePoints) return "A curve can have at most " + std::to_string(kMaxCurvePoints) + " points.";
+    for (const auto& p : points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0)
+            return "Curve points must lie between 0 and 1.";
+    }
+    std::sort(points.begin(), points.end(), [](const CurvePoint& a, const CurvePoint& b) { return a.x < b.x; });
+    for (std::size_t i = 1; i < points.size(); ++i)
+        if (points[i].x - points[i - 1].x < 1e-4) return "Two curve points cannot share the same input value.";
+    if (isToneCurve(kind) && points.size() == 1) return "A tone curve needs at least two points.";
+    if (isHueCurve(kind) && !points.empty() && points.back().x - points.front().x > 1.0 - 1e-4)
+        return "A hue curve wraps around: 0 and 1 are the same hue, so use only one of them.";
+    return std::nullopt;
+}
+
 bool ClipGrade::isIdentity() const {
+    if (lut) return false;
+    for (const auto& c : curves)
+        if (!c.empty()) return false;
     for (std::size_t i = 0; i < kGradeParamCount; ++i) {
         const AnimatedValue& v = values[i];
         if (v.animated() || v.value != gradeInfo(static_cast<GradeParam>(i)).defaultValue) return false;

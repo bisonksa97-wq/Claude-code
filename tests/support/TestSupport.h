@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "codec/VideoFrame.h"
@@ -33,5 +35,11 @@ struct Rgb {
     double r = 0, g = 0, b = 0;
 };
 Rgb averageColor(const VideoFrame& frame);
+
+// .cube text for a LUT sampling `f` on a size^3 lattice (size entries for 1D).
+using LutFunction = std::function<std::array<float, 3>(float r, float g, float b)>;
+std::string cubeText(int size, const LutFunction& f, bool is3D = true);
+// Writes a file, failing the current test on error.
+void writeText(const std::filesystem::path& path, const std::string& text);
 
 }  // namespace up::test

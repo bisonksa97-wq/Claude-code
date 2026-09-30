@@ -300,6 +300,84 @@ TEST(ProjectFormat, MigratesV6ToGrades) {
     EXPECT_DOUBLE_EQ(grade["liftB"]["value"].get<double>(), 0.05);
 }
 
+TEST(ProjectFormat, RoundTripsCurvesLutsVersionsAndMigratesV7) {
+    test::TempDir dir;
+    test::writeText(dir / "luts" / "look.cube", "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
+    Project p = sampleProject();
+    Timeline& tl = p.timelines[0];
+    Clip& clip = tl.tracks[0].clips[0];
+    clip.grade.curve(CurveKind::Master) = {{0.0, 0.1}, {1.0, 0.9}};
+    clip.grade.curve(CurveKind::HueVsSat) = {{0.3, 0.2}};
+    clip.grade.lut = LutRef{dir / "luts" / "look.cube", {}};
+    clip.gradeBypass = true;
+    clip.gradeVersion = "B";
+    ClipGrade a;
+    a[GradeParam::Saturation].value = 0.5;
+    clip.gradeVersions.push_back(NamedGrade{"A", a});
+    tl.outputLut = LutRef{dir / "luts" / "look.cube", {}};
+    tl.gradesBypassed = true;
+
+    const auto file = dir / "proj" / "p.uproj";
+    std::filesystem::create_directories(file.parent_path());
+    ASSERT_TRUE(ProjectSerializer::save(p, file).ok());
+    auto doc = nlohmann::json::parse(readFile(file).value());
+    const auto& cj = doc["timelines"][0]["tracks"][0]["clips"][0];
+    EXPECT_EQ(cj["grade"]["lut"]["relativePath"], "../luts/look.cube");
+    EXPECT_EQ(cj["grade"]["curves"]["master"].size(), 2u);
+    EXPECT_FALSE(cj["grade"]["curves"].contains("red"));  // empty curves are omitted
+    EXPECT_EQ(doc["timelines"][0]["outputLut"]["relativePath"], "../luts/look.cube");
+
+    auto loaded = ProjectSerializer::load(file);
+    ASSERT_TRUE(loaded.ok()) << loaded.error().toString();
+    const Timeline& lt = loaded.value().timelines[0];
+    const Clip& lc = lt.tracks[0].clips[0];
+    EXPECT_EQ(lc.grade.curve(CurveKind::Master), clip.grade.curve(CurveKind::Master));
+    EXPECT_EQ(lc.grade.curve(CurveKind::HueVsSat), clip.grade.curve(CurveKind::HueVsSat));
+    ASSERT_TRUE(lc.grade.lut.has_value());
+    EXPECT_EQ(lc.grade.lut->path, dir / "luts" / "look.cube");
+    EXPECT_TRUE(lc.gradeBypass);
+    EXPECT_EQ(lc.gradeVersion, "B");
+    ASSERT_EQ(lc.gradeVersions.size(), 1u);
+    EXPECT_EQ(lc.gradeVersions[0].name, "A");
+    EXPECT_DOUBLE_EQ(lc.gradeVersions[0].grade[GradeParam::Saturation].value, 0.5);
+    EXPECT_TRUE(lt.outputLut.has_value());
+    EXPECT_TRUE(lt.gradesBypassed);
+
+    // Moving the whole folder keeps the LUTs through their relative paths.
+    const auto moved = dir.path().parent_path() / (dir.path().filename().string() + "-moved");
+    std::filesystem::rename(dir.path(), moved);
+    auto relocated = ProjectSerializer::load(moved / "proj" / "p.uproj");
+    std::filesystem::rename(moved, dir.path());
+    ASSERT_TRUE(relocated.ok());
+    EXPECT_EQ(relocated.value().timelines[0].tracks[0].clips[0].grade.lut->path, (moved / "luts" / "look.cube").lexically_normal());
+
+    // Invalid curves are rejected on load.
+    auto bad = doc;
+    bad["timelines"][0]["tracks"][0]["clips"][0]["grade"]["curves"]["red"] = nlohmann::json::array({nlohmann::json::array({0.5, 2.0})});
+    EXPECT_FALSE(ProjectSerializer::fromJson(bad.dump()).ok());
+    auto dup = doc;
+    dup["timelines"][0]["tracks"][0]["clips"][0]["gradeVersions"][0]["name"] = "B";
+    EXPECT_FALSE(ProjectSerializer::fromJson(dup.dump()).ok());
+
+    // v7 documents have none of the new keys.
+    auto old = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    old["formatVersion"] = 7;
+    old["timelines"][0].erase("outputLut");
+    old["timelines"][0].erase("gradesBypassed");
+    for (auto& c : old["timelines"][0]["tracks"][0]["clips"]) {
+        c.erase("gradeBypass");
+        c.erase("gradeVersion");
+        c.erase("gradeVersions");
+    }
+    auto migrated = ProjectSerializer::fromJson(old.dump());
+    ASSERT_TRUE(migrated.ok()) << migrated.error().toString();
+    const Clip& mc = migrated.value().timelines[0].tracks[0].clips[0];
+    EXPECT_EQ(mc.gradeVersion, "A");
+    EXPECT_TRUE(mc.gradeVersions.empty());
+    EXPECT_FALSE(mc.gradeBypass);
+    EXPECT_FALSE(migrated.value().timelines[0].outputLut.has_value());
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

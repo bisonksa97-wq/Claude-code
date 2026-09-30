@@ -15,6 +15,24 @@ const char* toString(TrackKind kind) {
 
 namespace {
 constexpr std::array<const char*, 6> kMarkerColorNames{"red", "orange", "yellow", "green", "blue", "purple"};
+
+std::optional<std::string> checkGrade(const ClipGrade& grade) {
+    for (std::size_t g = 0; g < kGradeParamCount; ++g) {
+        const AnimatedValue& v = grade.values[g];
+        if (!std::isfinite(v.value)) return "non-finite grade value";
+        for (std::size_t k = 0; k < v.keys.size(); ++k) {
+            if (!std::isfinite(v.keys[k].value) || (k > 0 && v.keys[k - 1].frame >= v.keys[k].frame))
+                return "invalid grade keyframes";
+        }
+    }
+    for (std::size_t i = 0; i < kCurveKindCount; ++i) {
+        std::vector<CurvePoint> points = grade.curves[i];
+        if (auto problem = validateCurve(static_cast<CurveKind>(i), points)) return "invalid " + std::string(curveId(static_cast<CurveKind>(i))) + " curve (" + *problem + ")";
+        if (points != grade.curves[i]) return "unsorted " + std::string(curveId(static_cast<CurveKind>(i))) + " curve";
+    }
+    if (grade.lut && grade.lut->path.empty()) return "a LUT without a file";
+    return std::nullopt;
+}
 }  // namespace
 
 const char* toString(TransitionKind kind) { return kind == TransitionKind::Dip ? "dip" : "dissolve"; }
@@ -222,11 +240,13 @@ Status Timeline::validate() const {
             if (!checkMarkers(c.markers, false)) return fail("invalid markers on clip " + c.id);
             if ((c.transitionIn && c.transitionIn->duration <= 0) || (c.transitionOut && c.transitionOut->duration <= 0))
                 return fail("a transition on clip " + c.id + " has no length");
-            for (std::size_t g = 0; g < kGradeParamCount; ++g) {
-                const AnimatedValue& v = c.grade.values[g];
-                if (!std::isfinite(v.value)) return fail("non-finite grade value on clip " + c.id);
-                for (std::size_t k = 1; k < v.keys.size(); ++k)
-                    if (v.keys[k - 1].frame >= v.keys[k].frame) return fail("unsorted grade keyframes on clip " + c.id);
+            if (auto problem = checkGrade(c.grade)) return fail(*problem + " on clip " + c.id);
+            if (c.gradeVersion.empty()) return fail("clip " + c.id + " has an unnamed grade version");
+            std::set<std::string> versionNames{c.gradeVersion};
+            for (const auto& v : c.gradeVersions) {
+                if (v.name.empty() || !versionNames.insert(v.name).second)
+                    return fail("clip " + c.id + " has an empty or repeated grade version name");
+                if (auto problem = checkGrade(v.grade)) return fail(*problem + " in grade version " + v.name + " of clip " + c.id);
             }
             for (ClipParam p : kAllClipParams) {
                 const AnimatedValue& v = c.transform[p];

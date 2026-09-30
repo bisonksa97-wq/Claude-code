@@ -75,6 +75,22 @@ const ProjectMigrator& ProjectMigrator::standard() {
                     for (auto& clip : tr["clips"]) clip["grade"] = nlohmann::json::object();
             return Status::success();
         });
+        // v7 -> v8: grade curves/LUTs live inside "grade" (absent = none); clips gain
+        // bypass and grade versions (one version "A"); timelines gain an output LUT
+        // and a global grade bypass.
+        m.addStep(7, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"]) {
+                tl["outputLut"] = nullptr;
+                tl["gradesBypassed"] = false;
+                for (auto& tr : tl["tracks"])
+                    for (auto& clip : tr["clips"]) {
+                        clip["gradeBypass"] = false;
+                        clip["gradeVersion"] = "A";
+                        clip["gradeVersions"] = nlohmann::json::array();
+                    }
+            }
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

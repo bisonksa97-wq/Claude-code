@@ -39,7 +39,7 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 ## Phase 5: Colour ◐
 - ✅ Primary correction per clip (lift/gamma/gain/offset, contrast/pivot, saturation, exposure, white balance), keyframable, format v7 (session 10)
 - ✅ Color panel with balance wheels, copy/paste/reset grade; scopes (waveform, parade, vectorscope, histogram); CLI `grade`/`scopes` (session 10)
-- ☐ Curves (custom RGB/luma, hue-vs-hue/sat/lum), 3D LUT import (.cube), grade versions and bypass
+- ✅ Curves (master/RGB, hue vs hue/sat, lum vs sat) with an editor, `.cube` LUTs per clip and on the output, relinking, bypass (clip and timeline) and grade versions, format v8 (session 11)
 - ☐ Colour management: OCIO/ACES input/working/output transforms, float working space, HDR
 - ☐ Qualifiers, power windows, tracking, node graph; scopes on a worker thread / GPU
 
@@ -47,10 +47,9 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 Multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Phase 5: colour, part 2: curves, LUTs and a float grading path.**
-1. Move grading to a float (32-bit linear) intermediate per layer, so heavy grades no longer band, keeping 8-bit output; golden tests before/after.
-2. Custom curves per clip (master/R/G/B splines, hue-vs-sat, hue-vs-hue, lum-vs-sat), keyframable as a whole, stored in the grade (format v8 with a migration).
-3. 3D LUT support: parse `.cube` files (validation, readable errors), trilinear/tetrahedral interpolation, a per-clip LUT slot and a timeline output LUT; LUT files referenced like media (relinkable).
-4. Grade bypass per clip and for the whole timeline, and A/B grade versions.
-5. UI: a curves editor in the Color panel and a LUT picker; CLI `grade curve` / `grade lut`.
-6. Tests: curve evaluation and monotonicity, `.cube` parsing (good and malformed files), LUT identity and known transforms, bypass, persistence and migration.
+**Phase 5: colour, part 3: float working pipeline and colour management.**
+1. A float (RGBA 32-bit, linear) frame type through decode, grading, compositing, transitions and the output LUT, quantised only at the viewer/encoder. The 8-bit path is kept as the reference until golden tests show equal results on 8-bit material and less banding on heavy grades.
+2. Colour spaces on media and timelines: primaries and transfer function (Rec.709, sRGB, Rec.2020, linear, common camera log curves via built-in transfers), detected from FFmpeg metadata with a per-clip override. There is an input transform to the working space and an output transform to the delivery space.
+3. Optional OpenColorIO integration behind an interface (config file, display/view), detected at build time and reported honestly when it is absent.
+4. Viewer: a display transform, false-colour and clipping overlays; scopes in the working space.
+5. Tests: transfer function round trips, gamut conversions against reference matrices, float/8-bit golden comparisons, metadata detection, and format v9 migration for the colour-space fields.

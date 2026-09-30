@@ -21,6 +21,7 @@
 #include "media/SyntheticMedia.h"
 #include "render/ExportJob.h"
 #include "render/FrameCompositor.h"
+#include "render/Lut.h"
 #include "render/Scopes.h"
 
 namespace fs = std::filesystem;
@@ -183,6 +184,14 @@ Colour grades (video clips; params: liftMaster liftR liftG liftB gammaMaster gam
   grade <project> <clip> unkey <param> --at <pos>
   grade <project> <clip> reset [<param>]            without a param: the whole grade
   grade <project> <clip> copy-to <clip...>          paste this clip's grade onto others (one step)
+  grade <project> <clip> curve <curve> <x,y>...|none  curves: master red green blue hueVsHue hueVsSat lumVsSat
+  grade <project> <clip> lut <file.cube>|none
+  grade <project> <clip> bypass on|off
+  grade <project> <clip> version add|use|delete <name>
+  output-lut <project> <file.cube>|none             LUT on the whole composited picture
+  bypass-grades <project> on|off                    render every clip without its grade
+  relink-lut <project> <old path> <new file>        repoint every use of a moved LUT
+  lut-info <file.cube>                              check a LUT file and show its size and domain
   scopes <project> <pos>                            per-channel range and mean luma of a frame
 
 Transitions (at a clip's head: with an adjacent clip before it, an edit-point transition; else a fade)
@@ -536,7 +545,58 @@ int main(int argc, char** argv) {
                 for (const auto& k : v.keys) std::cout << "  [" << formatTimecode(c.toTimeline(k.frame), rate) << ": " << k.value << "]";
                 std::cout << "\n";
             }
+            for (std::size_t i = 0; i < kCurveKindCount; ++i) {
+                if (c.grade.curves[i].empty()) continue;
+                std::cout << "curve " << curveId(static_cast<CurveKind>(i)) << " =";
+                for (const auto& pt : c.grade.curves[i]) std::cout << " " << pt.x << "," << pt.y;
+                std::cout << "\n";
+            }
+            std::cout << "lut = " << (c.grade.lut ? c.grade.lut->path.string() : std::string("none")) << "\n";
+            std::cout << "bypass = " << (c.gradeBypass ? "on" : "off") << "\n";
+            std::cout << "version = " << c.gradeVersion << " (stored:";
+            for (const auto& v : c.gradeVersions) std::cout << " " << v.name;
+            std::cout << ")\n";
             return 0;
+        }
+        if (action == "curve") {
+            if (pos.size() < 5) return usageError("grade curve needs a curve name and points x,y ... or none");
+            const auto kind = curveKindFromString(pos[3]);
+            if (!kind) return usageError("unknown curve '" + pos[3] + "' (master red green blue hueVsHue hueVsSat lumVsSat)");
+            std::vector<CurvePoint> points;
+            if (pos[4] != "none") {
+                for (std::size_t i = 4; i < pos.size(); ++i) {
+                    CurvePoint pt;
+                    char extra = 0;
+                    if (std::sscanf(pos[i].c_str(), "%lf,%lf%c", &pt.x, &pt.y, &extra) != 2)
+                        return usageError("curve points look like 0.5,0.6");
+                    points.push_back(pt);
+                }
+            }
+            Status st = session.setGradeCurve(clip.value(), *kind, points);
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Updated the " + std::string(curveId(*kind)) + " curve");
+        }
+        if (action == "lut") {
+            if (pos.size() < 4) return usageError("grade lut needs a .cube file or none");
+            Status st = session.setGradeLut(clip.value(), pos[3] == "none" ? std::nullopt : std::optional<fs::path>(pos[3]));
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, pos[3] == "none" ? "Removed the LUT" : "Set the LUT");
+        }
+        if (action == "bypass") {
+            if (pos.size() < 4 || (pos[3] != "on" && pos[3] != "off")) return usageError("grade bypass needs on or off");
+            Status st = session.setGradeBypass(clip.value(), pos[3] == "on");
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Grade bypass " + pos[3]);
+        }
+        if (action == "version") {
+            if (pos.size() < 5) return usageError("grade version needs add|use|delete and a name");
+            Status st = Status::success();
+            if (pos[3] == "add") st = session.addGradeVersion(clip.value(), pos[4]);
+            else if (pos[3] == "use") st = session.selectGradeVersion(clip.value(), pos[4]);
+            else if (pos[3] == "delete") st = session.deleteGradeVersion(clip.value(), pos[4]);
+            else return usageError("grade version actions are add, use and delete");
+            if (!st.ok()) return fail(st.error());
+            return saveAndReport(session, "Grade version " + pos[3] + " " + pos[4]);
         }
         if (action == "copy-to") {
             if (pos.size() < 4) return usageError("grade copy-to needs one or more target clips");
@@ -574,10 +634,45 @@ int main(int argc, char** argv) {
         } else if (action == "reset") {
             st = session.resetGrade(clip.value(), *param);
         } else {
-            return usageError("grade actions are list, set, unkey, reset and copy-to");
+            return usageError("grade actions are list, set, unkey, reset, copy-to, curve, lut, bypass and version");
         }
         if (!st.ok()) return fail(st.error());
         return saveAndReport(session, "Updated " + std::string(gradeInfo(*param).id));
+    }};
+
+    commands["output-lut"] = {2, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        Status st = s.value()->setOutputLut(pos[1] == "none" ? std::nullopt : std::optional<fs::path>(pos[1]));
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), pos[1] == "none" ? "Removed the output LUT" : "Set the output LUT");
+    }};
+
+    commands["bypass-grades"] = {2, [&](const cli::Args&) {
+        if (pos[1] != "on" && pos[1] != "off") return usageError("bypass-grades needs on or off");
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        Status st = s.value()->setGradesBypassed(pos[1] == "on");
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(*s.value(), "All grades bypass " + pos[1]);
+    }};
+
+    commands["relink-lut"] = {3, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        auto n = s.value()->relinkLut(pos[1], pos[2]);
+        if (!n.ok()) return fail(n.error());
+        return saveAndReport(*s.value(), "Relinked " + std::to_string(n.value()) + " LUT reference(s)");
+    }};
+
+    commands["lut-info"] = {1, [&](const cli::Args&) {
+        auto lut = render::loadCubeLut(pos[0]);
+        if (!lut.ok()) return fail(lut.error());
+        const auto& l = lut.value();
+        std::cout << "title=" << l.title << "\ntype=" << (l.is3D ? "3D" : "1D") << "\nsize=" << l.size
+                  << "\ndomain_min=" << l.domainMin[0] << "," << l.domainMin[1] << "," << l.domainMin[2]
+                  << "\ndomain_max=" << l.domainMax[0] << "," << l.domainMax[1] << "," << l.domainMax[2] << "\n";
+        return 0;
     }};
 
     commands["scopes"] = {2, [&](const cli::Args&) {

@@ -1,12 +1,18 @@
 #include "ui/ColorPanel.h"
 
+#include <QCheckBox>
+#include <QComboBox>
 #include <QConicalGradient>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QRadialGradient>
 #include <QScrollArea>
@@ -17,6 +23,7 @@
 #include <numbers>
 
 #include "app/EditorSession.h"
+#include "render/ColorCurves.h"
 #include "ui/Theme.h"
 
 namespace up::ui {
@@ -181,6 +188,172 @@ void ColorWheel::mouseDoubleClickEvent(QMouseEvent*) {
     emit resetRequested();
 }
 
+// --- CurveEditor -----------------------------------------------------------------------
+
+CurveEditor::CurveEditor(QWidget* parent) : QWidget(parent) {
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setCursor(Qt::CrossCursor);
+    setToolTip(tr("Click to add a point, drag to move it, right-click to remove it, double-click to reset"));
+}
+
+void CurveEditor::setCurve(CurveKind kind, std::vector<CurvePoint> points) {
+    if (dragged_ >= 0) return;  // the model catches up on release
+    kind_ = kind;
+    points_ = std::move(points);
+    update();
+}
+
+QRectF CurveEditor::plotRect() const {
+    const double stripe = isToneCurve(kind_) ? 0.0 : 8.0;  // hue or luma reference under the plot
+    return QRectF(6, 6, std::max(10, width() - 12), std::max(10.0, height() - 12 - stripe));
+}
+
+QPointF CurveEditor::toWidget(const CurvePoint& p) const {
+    const QRectF r = plotRect();
+    return {r.left() + p.x * r.width(), r.bottom() - p.y * r.height()};
+}
+
+CurvePoint CurveEditor::fromWidget(const QPointF& pos) const {
+    const QRectF r = plotRect();
+    return {std::clamp((pos.x() - r.left()) / r.width(), 0.0, 1.0), std::clamp((r.bottom() - pos.y()) / r.height(), 0.0, 1.0)};
+}
+
+int CurveEditor::pointAt(const QPointF& pos) const {
+    for (std::size_t i = 0; i < points_.size(); ++i) {
+        const QPointF d = toWidget(points_[i]) - pos;
+        if (d.x() * d.x() + d.y() * d.y() <= 49.0) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void CurveEditor::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const DesignTokens& t = currentTokens();
+    const QRectF r = plotRect();
+    p.fillRect(rect(), t.panelAlt);
+    p.fillRect(r, t.window);
+    if (!isToneCurve(kind_)) {
+        const QRectF stripe(r.left(), r.bottom() + 3, r.width(), 6);
+        QLinearGradient g(stripe.topLeft(), stripe.topRight());
+        if (kind_ == CurveKind::LumVsSat) {
+            g.setColorAt(0, Qt::black);
+            g.setColorAt(1, Qt::white);
+        } else {
+            // Hue stripe: sample hueOf around the vectorscope so it matches the curve's x axis.
+            for (int i = 0; i <= 36; ++i) {
+                const double angle = 2.0 * std::numbers::pi * i / 36.0;
+                const double cb = 0.3 * std::cos(angle), cr = 0.3 * std::sin(angle);
+                const double rr = 0.5 + 1.5748 * cr, bb = 0.5 + 1.8556 * cb;
+                const double gg = (0.5 - kLumaR * rr - kLumaB * bb) / kLumaG;
+                const QColor c = QColor::fromRgbF(static_cast<float>(std::clamp(rr, 0.0, 1.0)), static_cast<float>(std::clamp(gg, 0.0, 1.0)),
+                                                  static_cast<float>(std::clamp(bb, 0.0, 1.0)));
+                g.setColorAt(render::hueOf(cb, cr), c);
+            }
+        }
+        p.fillRect(stripe, g);
+    }
+    p.setPen(QPen(t.border, 1));
+    for (int i = 1; i < 4; ++i) {
+        p.drawLine(QPointF(r.left() + r.width() * i / 4, r.top()), QPointF(r.left() + r.width() * i / 4, r.bottom()));
+        p.drawLine(QPointF(r.left(), r.top() + r.height() * i / 4), QPointF(r.right(), r.top() + r.height() * i / 4));
+    }
+    p.drawRect(r);
+    // Neutral reference: the diagonal for tone curves, the middle line otherwise.
+    p.setPen(QPen(t.textMuted, 1, Qt::DashLine));
+    if (isToneCurve(kind_)) p.drawLine(r.bottomLeft(), r.topRight());
+    else p.drawLine(QPointF(r.left(), r.center().y()), QPointF(r.right(), r.center().y()));
+
+    QColor colour = t.text;
+    if (kind_ == CurveKind::Red) colour = QColor(230, 70, 70);
+    if (kind_ == CurveKind::Green) colour = QColor(70, 200, 90);
+    if (kind_ == CurveKind::Blue) colour = QColor(90, 130, 240);
+    std::vector<CurvePoint> valid = points_;
+    if (!validateCurve(kind_, valid)) {
+        const render::CurveEvaluator curve(kind_, valid);
+        QPainterPath path;
+        const int steps = std::max(2, static_cast<int>(r.width()));
+        for (int i = 0; i <= steps; ++i) {
+            const double x = static_cast<double>(i) / steps;
+            const QPointF at = toWidget({x, curve(x)});
+            if (i == 0) path.moveTo(at);
+            else path.lineTo(at);
+        }
+        p.setPen(QPen(colour, 2));
+        p.drawPath(path);
+    }
+    p.setBrush(t.panel);
+    p.setPen(QPen(colour, 1.5));
+    for (const auto& pt : points_) p.drawEllipse(toWidget(pt), 4, 4);
+    if (!isEnabled()) p.fillRect(rect(), QColor(t.panel.red(), t.panel.green(), t.panel.blue(), 140));
+}
+
+void CurveEditor::mousePressEvent(QMouseEvent* event) {
+    const QPointF pos = event->position();
+    const int hit = pointAt(pos);
+    if (event->button() == Qt::RightButton) {
+        if (hit < 0) return;
+        points_.erase(points_.begin() + hit);
+        if (isToneCurve(kind_) && points_.size() < 2) points_.clear();  // back to the identity
+        update();
+        emit curveCommitted(points_);
+        return;
+    }
+    if (event->button() != Qt::LeftButton) return;
+    if (hit >= 0) {
+        dragged_ = hit;
+        changed_ = false;
+        return;
+    }
+    if (points_.size() >= kMaxCurvePoints) return;
+    // Start empty curves from their neutral shape so a first click bends rather than replaces it.
+    if (points_.empty()) {
+        if (isToneCurve(kind_)) points_ = {{0, 0}, {1, 1}};
+        else if (isHueCurve(kind_)) for (int i = 0; i < 6; ++i) points_.push_back({i / 6.0, 0.5});
+        else points_ = {{0, 0.5}, {0.5, 0.5}, {1, 0.5}};
+    }
+    CurvePoint added = fromWidget(pos);
+    if (isHueCurve(kind_)) added.x = std::min(added.x, 0.999);
+    const auto it = std::find_if(points_.begin(), points_.end(), [&](const CurvePoint& q) { return q.x >= added.x; });
+    if (it != points_.end() && std::abs(it->x - added.x) < 0.01) {
+        dragged_ = static_cast<int>(it - points_.begin());  // close to an existing x: move that one
+    } else {
+        dragged_ = static_cast<int>(points_.insert(it, added) - points_.begin());
+    }
+    changed_ = true;
+    moveDragged(pos);
+}
+
+void CurveEditor::moveDragged(const QPointF& pos) {
+    if (dragged_ < 0) return;
+    const auto i = static_cast<std::size_t>(dragged_);
+    CurvePoint p = fromWidget(pos);
+    // Keep the points ordered: a point stays between its neighbours.
+    const double lo = i > 0 ? points_[i - 1].x + 0.005 : 0.0;
+    const double hi = i + 1 < points_.size() ? points_[i + 1].x - 0.005 : (isHueCurve(kind_) ? 0.999 : 1.0);
+    p.x = std::clamp(p.x, lo, std::max(lo, hi));
+    if (points_[i] == p) return;
+    points_[i] = p;
+    changed_ = true;
+    update();
+}
+
+void CurveEditor::mouseMoveEvent(QMouseEvent* event) { moveDragged(event->position()); }
+
+void CurveEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (dragged_ < 0 || event->button() != Qt::LeftButton) return;
+    moveDragged(event->position());
+    dragged_ = -1;
+    if (changed_) emit curveCommitted(points_);
+}
+
+void CurveEditor::mouseDoubleClickEvent(QMouseEvent*) {
+    dragged_ = -1;
+    points_.clear();
+    update();
+    emit curveCommitted(points_);
+}
+
 // --- ColorPanel ------------------------------------------------------------------------
 
 ColorPanel::ColorPanel(QWidget* parent) : QWidget(parent) {
@@ -202,6 +375,55 @@ ColorPanel::ColorPanel(QWidget* parent) : QWidget(parent) {
     form_ = new QWidget(content);
     auto* formLayout = new QVBoxLayout(form_);
     formLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* versionRow = new QHBoxLayout;
+    versionRow->addWidget(new QLabel(tr("Version"), form_));
+    versions_ = new QComboBox(form_);
+    versions_->setAccessibleName(tr("Grade version"));
+    versionRow->addWidget(versions_, 1);
+    newVersion_ = new QPushButton(tr("New"), form_);
+    newVersion_->setToolTip(tr("Keep the current grade as a version and continue on a copy"));
+    deleteVersion_ = new QPushButton(tr("Delete"), form_);
+    deleteVersion_->setToolTip(tr("Delete the version shown and switch to the most recently stored one"));
+    bypass_ = new QCheckBox(tr("Bypass"), form_);
+    bypass_->setToolTip(tr("Show this clip without its grade"));
+    versionRow->addWidget(newVersion_);
+    versionRow->addWidget(deleteVersion_);
+    versionRow->addWidget(bypass_);
+    formLayout->addLayout(versionRow);
+    connect(versions_, &QComboBox::activated, this, [this](int index) {
+        if (session_ && !updating_) report(session_->selectGradeVersion(clipId_, versions_->itemText(index).toStdString()));
+    });
+    connect(newVersion_, &QPushButton::clicked, this, [this] {
+        const Clip* clip = session_ ? session_->timeline().clip(clipId_) : nullptr;
+        if (!clip) return;
+        // Next free letter name: A, B, C ... then "Version N".
+        auto taken = [&](const std::string& n) {
+            return n == clip->gradeVersion || std::any_of(clip->gradeVersions.begin(), clip->gradeVersions.end(),
+                                                          [&](const NamedGrade& v) { return v.name == n; });
+        };
+        std::string name;
+        for (char c = 'A'; c <= 'Z' && name.empty(); ++c)
+            if (!taken(std::string(1, c))) name = std::string(1, c);
+        for (int n = 27; name.empty(); ++n)
+            if (!taken("Version " + std::to_string(n))) name = "Version " + std::to_string(n);
+        report(session_->addGradeVersion(clipId_, name));
+    });
+    connect(deleteVersion_, &QPushButton::clicked, this, [this] {
+        const Clip* clip = session_ ? session_->timeline().clip(clipId_) : nullptr;
+        if (!clip || clip->gradeVersions.empty()) return;
+        // Deletes the version being shown, switching to the most recently stored one (one undo step).
+        const std::string doomed = clip->gradeVersion;
+        const std::string next = clip->gradeVersions.back().name;
+        Transaction tx(session_->history(), "Delete Grade Version");
+        Status s = session_->selectGradeVersion(clipId_, next);
+        if (s.ok()) s = session_->deleteGradeVersion(clipId_, doomed);
+        if (s.ok()) tx.commit();
+        report(s);
+    });
+    connect(bypass_, &QCheckBox::toggled, this, [this](bool on) {
+        if (session_ && !updating_) report(session_->setGradeBypass(clipId_, on));
+    });
 
     auto* wheelRow = new QHBoxLayout;
     for (std::size_t i = 0; i < kWheels.size(); ++i) {
@@ -264,6 +486,45 @@ ColorPanel::ColorPanel(QWidget* parent) : QWidget(parent) {
         });
     }
     formLayout->addLayout(grid);
+
+    auto* curveHeader = new QHBoxLayout;
+    curveHeader->addWidget(new QLabel(QString("<b>%1</b>").arg(tr("Curves")), form_));
+    curveKind_ = new QComboBox(form_);
+    curveKind_->setAccessibleName(tr("Curve"));
+    for (std::size_t i = 0; i < kCurveKindCount; ++i) curveKind_->addItem(tr(curveLabel(static_cast<CurveKind>(i))));
+    curveHeader->addWidget(curveKind_, 1);
+    resetCurve_ = new QPushButton(tr("Reset Curve"), form_);
+    curveHeader->addWidget(resetCurve_);
+    formLayout->addLayout(curveHeader);
+    curveEditor_ = new CurveEditor(form_);
+    curveEditor_->setAccessibleName(tr("Curve editor"));
+    formLayout->addWidget(curveEditor_);
+    connect(curveKind_, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
+    connect(curveEditor_, &CurveEditor::curveCommitted, this, [this](const std::vector<CurvePoint>& points) {
+        if (session_) report(session_->setGradeCurve(clipId_, curveEditor_->kind(), points));
+    });
+    connect(resetCurve_, &QPushButton::clicked, this, [this] {
+        if (session_) report(session_->setGradeCurve(clipId_, curveEditor_->kind(), {}));
+    });
+
+    auto* lutRow = new QHBoxLayout;
+    lutRow->addWidget(new QLabel(QString("<b>%1</b>").arg(tr("LUT")), form_));
+    lutLabel_ = new QLabel(form_);
+    lutLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    lutRow->addWidget(lutLabel_, 1);
+    loadLut_ = new QPushButton(tr("Load LUT…"), form_);
+    clearLut_ = new QPushButton(tr("Clear"), form_);
+    clearLut_->setAccessibleName(tr("Clear LUT"));
+    lutRow->addWidget(loadLut_);
+    lutRow->addWidget(clearLut_);
+    formLayout->addLayout(lutRow);
+    connect(loadLut_, &QPushButton::clicked, this, [this] {
+        const QString file = QFileDialog::getOpenFileName(this, tr("Load LUT"), {}, tr("Cube LUTs (*.cube);;All files (*)"));
+        if (!file.isEmpty()) loadLut(file);
+    });
+    connect(clearLut_, &QPushButton::clicked, this, [this] {
+        if (session_) report(session_->setGradeLut(clipId_, std::nullopt));
+    });
 
     auto* buttons = new QHBoxLayout;
     copy_ = new QPushButton(tr("Copy Grade"), form_);
@@ -342,7 +603,34 @@ void ColorPanel::refresh() {
         const auto pos = channelOffsetsToWheel(d, kWheels[w].range);
         wheels_[w]->setBalance(pos[0], pos[1]);
     }
+    std::vector<QString> names{QString::fromStdString(clip->gradeVersion)};
+    for (const auto& v : clip->gradeVersions) names.push_back(QString::fromStdString(v.name));
+    std::sort(names.begin(), names.end());
+    versions_->clear();
+    for (const auto& n : names) versions_->addItem(n);
+    versions_->setCurrentText(QString::fromStdString(clip->gradeVersion));
+    deleteVersion_->setEnabled(!clip->gradeVersions.empty());
+    bypass_->setChecked(clip->gradeBypass);
+    const auto kind = static_cast<CurveKind>(std::max(0, curveKind_->currentIndex()));
+    curveEditor_->setCurve(kind, clip->grade.curve(kind));
+    resetCurve_->setEnabled(!clip->grade.curve(kind).empty());
+    if (clip->grade.lut) {
+        const QString file = QString::fromStdString(clip->grade.lut->path.string());
+        const bool present = QFileInfo::exists(file);
+        lutLabel_->setText(present ? QFileInfo(file).fileName()
+                                   : tr("<span style='color:%1'>%2 (missing)</span>")
+                                         .arg(currentTokens().warning.name(), QFileInfo(file).fileName().toHtmlEscaped()));
+        lutLabel_->setToolTip(file);
+    } else {
+        lutLabel_->setText(tr("None"));
+        lutLabel_->setToolTip({});
+    }
+    clearLut_->setEnabled(clip->grade.lut.has_value());
     updating_ = false;
+}
+
+void ColorPanel::loadLut(const QString& path) {
+    if (session_) report(session_->setGradeLut(clipId_, std::filesystem::path(path.toStdString())));
 }
 
 void ColorPanel::commitWheel(int index, double x, double y) {

@@ -63,6 +63,8 @@ public:
     void setSession(std::unique_ptr<EditorSession> session);
     bool openProjectFile(const QString& path, bool offerRecovery = true);
     bool exportTo(const QString& path, bool showProgress = true);
+    // Sets (empty path = removes) the timeline's output LUT, reporting errors.
+    bool setOutputLut(const QString& path);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -98,6 +100,7 @@ private:
     void applyTransition(TransitionKind kind);
     void removeTransitions();
     void pasteGrade();
+    void relinkMissingLuts();
 
     // Edit commands operating on the selected clip / playhead.
     void razor();
@@ -126,6 +129,7 @@ private:
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* saveAction_ = nullptr;
+    QAction* bypassGradesAction_ = nullptr;
     bool exporting_ = false;
 };
 

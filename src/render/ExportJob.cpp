@@ -44,6 +44,11 @@ Status ExportJob::run(const ProgressFn& progress) {
     settings.sampleRate = timeline->sampleRate;
     settings.channels = AudioMixer::kChannels;
 
+    // A missing LUT would silently change the delivered colours, so refuse up front.
+    if (Status luts = checkTimelineLuts(*timeline); !luts.ok()) return luts;
+    if (timeline->gradesBypassed)
+        UP_LOG_WARN(log::sub::Render, "Exporting with all clip grades bypassed (Color > Bypass All Grades).");
+
     // Write to a temporary file so a cancelled or failed export never leaves a truncated output behind.
     // The extension is kept so FFmpeg still picks the right container.
     const std::filesystem::path temp = options_.output.parent_path() /
