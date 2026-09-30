@@ -21,6 +21,11 @@ struct MediaInfo {
     FrameRate frameRate{0, 1};
     std::string pixelFormat;
     bool isStill = false;
+    // Colour tags as FFmpeg names ("bt709", "smpte2084", ...); empty = unspecified.
+    std::string colorPrimaries;
+    std::string colorTransfer;
+    std::string colorMatrix;
+    std::string colorRange;  // "tv" (limited) or "pc" (full)
 
     bool hasAudio = false;
     std::string audioCodec;

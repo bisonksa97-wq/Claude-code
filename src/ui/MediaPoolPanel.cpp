@@ -46,7 +46,7 @@ MediaPoolPanel::MediaPoolPanel(QWidget* parent) : QWidget(parent) {
 
     tree_ = new MediaTree(this);
     tree_->setColumnCount(4);
-    tree_->setHeaderLabels({tr("Name"), tr("Duration"), tr("Format"), tr("Status")});
+    tree_->setHeaderLabels({tr("Name"), tr("Duration"), tr("Format"), tr("Color"), tr("Status")});
     tree_->setRootIsDecorated(false);
     tree_->setDragEnabled(true);
     tree_->setDragDropMode(QAbstractItemView::DragOnly);
@@ -131,10 +131,15 @@ void MediaPoolPanel::refresh() {
         if (m->info.hasAudio)
             format << QString("%1 %2ch").arg(QString::fromStdString(m->info.audioCodec)).arg(m->info.channels);
         item->setText(2, format.join(" · "));
-        item->setText(3, m->online ? tr("Online") : tr("Offline"));
+        if (m->info.hasVideo) {
+            item->setText(3, QString::fromStdString(mediaColorSpace(*m).displayName()) + (m->colorSpace ? " *" : ""));
+            item->setToolTip(3, m->colorSpace ? tr("Set by hand (right-click ▸ Color Space to change)")
+                                              : tr("Detected from the file's tags"));
+        }
+        item->setText(4, m->online ? tr("Online") : tr("Offline"));
         if (!m->online) {
-            for (int c = 0; c < 4; ++c) item->setForeground(c, tokens.warning);
-            item->setToolTip(3, tr("File not found: %1. Right-click to relink.").arg(QString::fromStdString(m->path.string())));
+            for (int c = 0; c < 5; ++c) item->setForeground(c, tokens.warning);
+            item->setToolTip(4, tr("File not found: %1. Right-click to relink.").arg(QString::fromStdString(m->path.string())));
         }
         if (item->data(0, Qt::UserRole).toString() == selected) item->setSelected(true);
     }
@@ -148,6 +153,25 @@ void MediaPoolPanel::showContextMenu(const QPoint& pos) {
     if (item) {
         const QString id = item->data(0, Qt::UserRole).toString();
         menu.addAction(tr("Relink / Replace Source…"), this, [this, id] { emit relinkRequested(id); });
+        const MediaItem* m = session_ ? session_->project().findMedia(id.toStdString()) : nullptr;
+        if (m && m->info.hasVideo) {
+            QMenu* spaces = menu.addMenu(tr("Color Space"));
+            MediaItem detected = *m;
+            detected.colorSpace.reset();
+            QAction* automatic = spaces->addAction(
+                tr("Auto (%1)").arg(QString::fromStdString(mediaColorSpace(detected).displayName())), this,
+                [this, id] { emit colorSpaceRequested(id, {}); });
+            automatic->setCheckable(true);
+            automatic->setChecked(!m->colorSpace);
+            spaces->addSeparator();
+            for (const auto& preset : colorSpacePresets()) {
+                const QString spaceId = QString::fromStdString(preset.space.id());
+                QAction* a = spaces->addAction(QString::fromUtf8(preset.name), this,
+                                               [this, id, spaceId] { emit colorSpaceRequested(id, spaceId); });
+                a->setCheckable(true);
+                a->setChecked(m->colorSpace && *m->colorSpace == preset.space);
+            }
+        }
     }
     menu.exec(tree_->viewport()->mapToGlobal(pos));
 }

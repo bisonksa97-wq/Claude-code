@@ -3,10 +3,12 @@ up_add_module(up_render
         AudioMixer.cpp
         ColorCurves.cpp
         ColorGrading.cpp
+        ColorManagement.cpp
         Compositing.cpp
         ExportJob.cpp
         FrameCompositor.cpp
         Lut.cpp
         MediaSource.cpp
         Scopes.cpp
+        ViewerOverlay.cpp
     DEPS up_core up_audio up_timeline up_project up_codec)

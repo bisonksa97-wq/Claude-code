@@ -47,4 +47,10 @@ void initialize();
 inline constexpr int kSwsAlign = 64;
 inline int alignedStride(int bytes) { return (bytes + kSwsAlign - 1) / kSwsAlign * kSwsAlign; }
 
+// swscale colourspace (SWS_CS_*) for a stream's YUV matrix. Unspecified matrices
+// follow common practice: BT.709 for HD and larger, BT.601 below 720 lines.
+int swsMatrixFor(AVColorSpace space, int height);
+// swscale colourspace for an FFmpeg matrix name ("bt709", "bt2020nc", ...).
+int swsMatrixForName(const std::string& name);
+
 }  // namespace up::ffmpeg

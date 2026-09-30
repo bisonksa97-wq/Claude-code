@@ -40,16 +40,17 @@ Build system, module layout, logging, errors, command system and undo/redo, proj
 - ✅ Primary correction per clip (lift/gamma/gain/offset, contrast/pivot, saturation, exposure, white balance), keyframable, format v7 (session 10)
 - ✅ Color panel with balance wheels, copy/paste/reset grade; scopes (waveform, parade, vectorscope, histogram); CLI `grade`/`scopes` (session 10)
 - ✅ Curves (master/RGB, hue vs hue/sat, lum vs sat) with an editor, `.cube` LUTs per clip and on the output, relinking, bypass (clip and timeline) and grade versions, format v8 (session 11)
-- ☐ Colour management: OCIO/ACES input/working/output transforms, float working space, HDR
+- ✅ Colour management: media/timeline/output colour spaces (incl. PQ, HLG, LogC3, S-Log3), float working pipeline, tagged exports, correct YUV matrices, viewer clipping/false-colour overlays, format v9 (session 12)
+- ☐ OCIO/ACES configs, tone and gamut mapping, an HDR display path, high-bit-depth decode/encode
 - ☐ Qualifiers, power windows, tracking, node graph; scopes on a worker thread / GPU
 
 ## Phases 6–15
 Multicam and text, VFX node graph, motion, advanced audio, AI (provider abstraction first), advanced VFX, delivery presets/DCP/IMF, collaboration, plugins/scripting, professionalization. These are unchanged from the master prompt. Each starts with its data model and interfaces, tests and an honest status entry in [feature-status.md](feature-status.md).
 
 ## Next recommended task
-**Phase 5: colour, part 3: float working pipeline and colour management.**
-1. A float (RGBA 32-bit, linear) frame type through decode, grading, compositing, transitions and the output LUT, quantised only at the viewer/encoder. The 8-bit path is kept as the reference until golden tests show equal results on 8-bit material and less banding on heavy grades.
-2. Colour spaces on media and timelines: primaries and transfer function (Rec.709, sRGB, Rec.2020, linear, common camera log curves via built-in transfers), detected from FFmpeg metadata with a per-clip override. There is an input transform to the working space and an output transform to the delivery space.
-3. Optional OpenColorIO integration behind an interface (config file, display/view), detected at build time and reported honestly when it is absent.
-4. Viewer: a display transform, false-colour and clipping overlays; scopes in the working space.
-5. Tests: transfer function round trips, gamut conversions against reference matrices, float/8-bit golden comparisons, metadata detection, and format v9 migration for the colour-space fields.
+**Delivery, part 1: high-bit-depth I/O, export presets and a render queue.**
+1. High-bit-depth decode: swscale to 16-bit RGBA (or float) instead of RGBA8, so 10/12-bit and log/HDR sources reach the float pipeline intact; golden tests on 10-bit synthetic media.
+2. 10-bit encode: HEVC Main10 (libx265) and ProRes 422 HQ/4444 (prores_ks) when the encoders are available, with honest fallbacks and readable errors when they are not; HDR metadata (mastering display, MaxCLL/MaxFALL) for PQ exports.
+3. An export dialog with presets (H.264 web, HEVC 10-bit, ProRes master, audio-only WAV, image sequence) stored as JSON; a background render queue with progress, cancel and per-job logs.
+4. CLI: `export --preset`, `presets list`, `queue` commands.
+5. Tests: bit-depth round trips (10-bit ramp keeps > 256 levels), preset validation, encoder fallback, queue ordering and cancellation, metadata written and probed back.

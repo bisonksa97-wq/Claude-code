@@ -1,6 +1,6 @@
 # Project format (`.uproj`)
 
-A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **8**, `Project::kFormatVersion`).
+A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion` (current: **9**, `Project::kFormatVersion`).
 
 ```jsonc
 {
@@ -22,7 +22,8 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
                 "frameRate": "24000/1001", "pixelFormat": "yuv420p", "isStill": false,
                 "hasAudio": true, "audioCodec": "aac", "sampleRate": 48000, "channels": 2,
                 "timecode": "" },
-      "markIn": 1.5, "markOut": 3.25              // source marks in seconds, or null
+      "markIn": 1.5, "markOut": 3.25,             // source marks in seconds, or null
+      "colorSpace": null                           // override, e.g. "awg3/logc3"; null = detected from tags
   } ],
   "timelines": [ {
       "id": "…", "name": "Timeline 1", "frameRate": "25/1", "width": 1920, "height": 1080, "sampleRate": 48000,
@@ -32,6 +33,8 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
                      "comment": "", "color": "yellow" } ],  // timeline frames, sorted
       "outputLut": null,                                // or { "path": …, "relativePath": … }
       "gradesBypassed": false,
+      "colorSpace": "rec709/bt1886",                    // timeline colour space: "<primaries>/<transfer>"
+      "outputColorSpace": null,                         // null = same as the timeline
       "tracks": [ {
           "id": "…", "kind": "video" | "audio", "name": "V1",
           "enabled": true, "locked": false, "muted": false, "solo": false, "gainDb": 0,
@@ -89,6 +92,7 @@ A `.uproj` is UTF-8 JSON. The format is versioned by the integer `formatVersion`
 | 6 | Track `pan` and `effects`; clip `transform` may hold `volume` (dB) and `pan` | Pan 0 and an empty effect chain on every track. Covered by `ProjectFormat.RoundTripsTrackAudioAndMigratesV5`. Invalid effect parameters in a file are rejected on load. |
 | 7 | Clip `grade` (primary colour correction: lift/gamma/gain/offset master and RGB, contrast, pivot, saturation, exposure, temperature, tint; all animatable) | An empty grade object (identity) on every clip. Covered by `ProjectFormat.MigratesV6ToGrades`. Parameter ids are listed in `timeline/Grade.cpp`. Unknown ids are ignored, non-finite values are rejected on load, and out-of-range values are clamped when rendering. |
 | 8 | Grade `curves` and `lut` (inside `grade`); clip `gradeBypass`, `gradeVersion`, `gradeVersions`; timeline `outputLut`, `gradesBypassed` | Bypass off, one active version named "A" with no stored versions, no output LUT (curves and LUT are simply absent). Covered by `ProjectFormat.RoundTripsCurvesLutsVersionsAndMigratesV7`. Curves must be valid (points in 0..1, distinct x, sorted, tone curves ≥ 2 points) and version names unique per clip, or the file is rejected. LUT paths resolve like media paths: absolute first, then relative to the project file. |
+| 9 | Timeline `colorSpace` and `outputColorSpace`; media `colorSpace`; media `info` gains `colorPrimaries`, `colorTransfer`, `colorMatrix`, `colorRange` (FFmpeg tag names) | Timelines become Rec.709 gamma 2.4 with the output in the same space; media overrides are null. Old media info has no tags, so video is detected as Rec.709 gamma 2.4 (pixels pass through unchanged, as before) and stills as sRGB (converted, so they render slightly differently than before). Covered by `ProjectFormat.RoundTripsColorSpacesAndMigratesV8`. Ids are `<primaries>/<transfer>` from `timeline/ColorSpace.cpp`; an unknown id falls back to Rec.709 gamma 2.4 with a logged warning. |
 
 ## Safety
 

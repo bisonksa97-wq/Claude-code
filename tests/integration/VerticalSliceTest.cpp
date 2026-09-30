@@ -14,6 +14,7 @@
 #include "codec/VideoDecoder.h"
 #include "project/ProjectSerializer.h"
 #include "render/AudioMixer.h"
+#include "render/ColorManagement.h"
 #include "render/ExportJob.h"
 #include "render/FrameCompositor.h"
 #include "support/TestSupport.h"
@@ -626,4 +627,70 @@ TEST(Color, CurvesLutsBypassAndVersions) {
     EXPECT_FALSE(session->relinkLut(swapLut, movedLut).ok());  // nothing uses the old path now
     EXPECT_TRUE(render::checkTimelineLuts(tl).ok());
     EXPECT_NEAR(colorAt(5).r, swapped.r, 2);
+}
+
+TEST(ColorManagement, TimelineMediaAndOutputSpacesThroughTheRenderer) {
+    test::TempDir dir;
+    test::makeMedia(dir / "red.mp4", test::solid(200, 40, 40, 75));  // handles for the dissolve
+    test::makeMedia(dir / "blue.mp4", test::solid(40, 40, 200, 75));
+    auto session = EditorSession::createNew("CM", SequenceSettings{FrameRate{25, 1}, 160, 120, 48000});
+    const auto ids = session->importMedia({dir / "red.mp4", dir / "blue.mp4"}).importedIds;
+    ASSERT_TRUE(session->placeMedia(ids[0], 0, ops::EditMode::Overwrite, {}, {}, 0, 50).ok());
+    ASSERT_TRUE(session->placeMedia(ids[1], 50, ops::EditMode::Overwrite, {}, {}, 25, 50).ok());
+    const Timeline& tl = session->timeline();
+    const std::string blue = tl.tracks[0].clips[1].id;
+    // Our own exports are tagged, so they are detected as Rec.709 (gamma 2.4) and pass straight through.
+    const MediaItem& red = *session->project().findMedia(ids[0]);
+    EXPECT_EQ(red.info.colorPrimaries, "bt709");
+    EXPECT_EQ(mediaColorSpace(red), (ColorSpace{Primaries::Rec709, Transfer::BT1886}));
+    render::FrameCompositor compositor(render::resolverFor(session->project()));
+    auto colorAt = [&](FrameIndex f) { return test::averageColor(compositor.render(tl, f).value()); };
+    const auto original = colorAt(10);
+    EXPECT_NEAR(original.r, 200, 3);
+
+    // A linear timeline shown as linear is dark; with a Rec.709 output it round-trips.
+    ASSERT_TRUE(session->setTimelineColorSpace({Primaries::Rec709, Transfer::Linear}).ok());
+    EXPECT_NEAR(colorAt(10).r, 255 * std::pow(original.r / 255, 2.4), 3);
+    ASSERT_TRUE(session->setOutputColorSpace(ColorSpace{Primaries::Rec709, Transfer::BT1886}).ok());
+    EXPECT_NEAR(colorAt(10).r, original.r, 1.5);
+    EXPECT_NEAR(colorAt(10).g, original.g, 1.5);
+
+    // Dissolves mix in the timeline space: in linear light the midpoint is brighter.
+    ASSERT_TRUE(session->setTransition(blue, ops::Edge::In, Transition{TransitionKind::Dissolve, 20, TransitionAlignment::Center}).ok());
+    const auto linearMid = colorAt(50);
+    ASSERT_TRUE(session->setTimelineColorSpace({Primaries::Rec709, Transfer::BT1886}).ok());
+    ASSERT_TRUE(session->setOutputColorSpace(std::nullopt).ok());
+    const auto encodedMid = colorAt(50);
+    EXPECT_GT(linearMid.r, encodedMid.r + 20);
+    EXPECT_GT(linearMid.b, encodedMid.b + 20);
+
+    // A media override reinterprets the pixels: sRGB material on a gamma 2.4 timeline.
+    ASSERT_TRUE(session->setMediaColorSpace(ids[0], ColorSpace{Primaries::Rec709, Transfer::SRGB}).ok());
+    const double expected = 255 * std::pow(render::decodeTransfer(Transfer::SRGB, original.r / 255), 1 / 2.4);
+    EXPECT_NEAR(colorAt(10).r, expected, 1.5);
+    session->undo();
+    EXPECT_NEAR(colorAt(10).r, original.r, 1.5);
+    EXPECT_EQ(session->setMediaColorSpace("nope", std::nullopt).error().code, ErrorCode::NotFound);
+
+    // Export tags the file with the output space, and the pixels follow it.
+    render::ExportOptions options;
+    options.output = dir / "hdr.mp4";
+    options.includeAudio = false;
+    ASSERT_TRUE(session->setOutputColorSpace(ColorSpace{Primaries::Rec2020, Transfer::PQ}).ok());
+    ASSERT_TRUE(render::ExportJob(session->project(), tl.id, options).run().ok());
+    auto probed = probeMedia(options.output);
+    ASSERT_TRUE(probed.ok());
+    EXPECT_EQ(probed.value().colorPrimaries, "bt2020");
+    EXPECT_EQ(probed.value().colorTransfer, "smpte2084");
+    EXPECT_EQ(probed.value().colorMatrix, "bt2020nc");
+    EXPECT_EQ(detectColorSpace(probed.value().colorPrimaries, probed.value().colorTransfer, false),
+              (ColorSpace{Primaries::Rec2020, Transfer::PQ}));
+    // Decoding the HDR file with its own (BT.2020) matrix gives back the rendered PQ values.
+    const auto rendered = colorAt(10);
+    auto decoder = VideoDecoder::open(options.output);
+    ASSERT_TRUE(decoder.ok());
+    const auto decoded = test::averageColor(decoder.value()->frameAt(0.4).value());
+    EXPECT_NEAR(decoded.r, rendered.r, 3);
+    EXPECT_NEAR(decoded.g, rendered.g, 3);
+    EXPECT_NEAR(decoded.b, rendered.b, 3);
 }

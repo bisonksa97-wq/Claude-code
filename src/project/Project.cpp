@@ -68,3 +68,12 @@ const Timeline* Project::activeTimeline() const {
 }
 
 }  // namespace up
+
+namespace up {
+
+ColorSpace mediaColorSpace(const MediaItem& item) {
+    if (item.colorSpace) return *item.colorSpace;
+    return detectColorSpace(item.info.colorPrimaries, item.info.colorTransfer, item.info.isStill);
+}
+
+}  // namespace up

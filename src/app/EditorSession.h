@@ -175,6 +175,11 @@ public:
     Result<int> relinkLut(const std::filesystem::path& oldPath, const std::filesystem::path& newPath);
     // LUT files the timeline references that do not exist on disk.
     std::vector<std::filesystem::path> missingLuts() const;
+    // Colour management. `setMediaColorSpace` with nullopt returns to the detected space.
+    Status setMediaColorSpace(const std::string& mediaId, std::optional<ColorSpace> space);
+    Status setTimelineColorSpace(ColorSpace space);
+    // nullopt = the output uses the timeline colour space.
+    Status setOutputColorSpace(std::optional<ColorSpace> space);
     // Grade versions: `addGradeVersion` stores the active grade under its name and
     // starts a new active version `name` as a copy of it; `selectGradeVersion` swaps
     // the active grade with a stored one; the active version cannot be deleted.

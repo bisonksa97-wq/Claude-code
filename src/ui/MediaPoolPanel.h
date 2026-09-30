@@ -46,6 +46,8 @@ public:
 signals:
     void importRequested();
     void relinkRequested(const QString& mediaId);
+    // Empty spaceId = back to the detected space.
+    void colorSpaceRequested(const QString& mediaId, const QString& spaceId);
     void mediaActivated(const QString& mediaId);
 
 private:

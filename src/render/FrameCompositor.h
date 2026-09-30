@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/Result.h"
+#include "render/FloatFrame.h"
 #include "render/Lut.h"
 #include "render/MediaSource.h"
 #include "timeline/Timeline.h"
@@ -26,9 +27,10 @@ struct Layer;
 // skipped. Offline media renders as a layer of the offline colour so problems are
 // visible rather than silently black.
 //
-// Each clip's grade (unless bypassed on the clip or the timeline) is applied to the
-// decoded source before its transform; the timeline's output LUT is applied to the
-// finished picture. A LUT file that cannot be loaded is skipped with a logged warning
+// Colour: each decoded source is converted from its media colour space into the
+// timeline colour space (float), graded there (unless bypassed on the clip or the
+// timeline) and composited in float. The finished picture is converted to the output
+// colour space, the output LUT is applied, and only then is it quantised to 8 bits. A LUT file that cannot be loaded is skipped with a logged warning
 // (see checkTimelineLuts, which export uses to refuse such timelines).
 class FrameCompositor {
 public:
@@ -41,7 +43,7 @@ public:
     static constexpr uint8_t kOfflineColor[3] = {140, 20, 40};
 
 private:
-    Status drawLayer(VideoFrame& canvas, const detail::Layer& layer, const Timeline& timeline, FrameIndex frame);
+    Status drawLayer(FloatFrame& canvas, const detail::Layer& layer, const Timeline& timeline, FrameIndex frame);
 
     const Lut* lut(const std::optional<LutRef>& ref);
 

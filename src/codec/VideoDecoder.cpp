@@ -5,6 +5,7 @@
 #include <vector>
 
 extern "C" {
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -29,6 +30,10 @@ struct VideoDecoder::Impl {
     int64_t startPts = 0;
     SwsContext* sws = nullptr;
     std::vector<uint8_t> scratch;  // padded conversion target
+    // YUV matrix/range last configured on `sws` (reconfigured when either changes).
+    const SwsContext* configuredSws = nullptr;
+    int configuredMatrix = -1;
+    int configuredRange = -1;
 
     // Decode forward beyond this many seconds triggers a seek instead.
     static constexpr double kForwardDecodeLimit = 2.0;
@@ -141,6 +146,20 @@ struct VideoDecoder::Impl {
         if (!sws) {
             return makeError(ErrorCode::DecodeError, "codec", "Unable to convert the decoded frame to RGB.",
                              "The pixel format may be unsupported.");
+        }
+        // Use the stream's YUV matrix and range (swscale otherwise assumes BT.601 limited).
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(src->format));
+        if (desc && !(desc->flags & AV_PIX_FMT_FLAG_RGB)) {
+            const int matrix = ffmpeg::swsMatrixFor(src->colorspace, src->height);
+            const std::string name = desc->name ? desc->name : "";
+            const int fullRange = src->color_range == AVCOL_RANGE_JPEG || name.rfind("yuvj", 0) == 0 ? 1 : 0;
+            if (sws != configuredSws || matrix != configuredMatrix || fullRange != configuredRange) {
+                const int* coefficients = sws_getCoefficients(matrix);
+                sws_setColorspaceDetails(sws, coefficients, fullRange, coefficients, 1, 0, 1 << 16, 1 << 16);
+                configuredSws = sws;
+                configuredMatrix = matrix;
+                configuredRange = fullRange;
+            }
         }
         // Convert into padded scratch memory (see ffmpeg::alignedStride), then copy the
         // tightly packed rows out, so the returned frame never has to absorb SIMD overshoot.

@@ -1,5 +1,8 @@
 #include "ui/ViewerPanel.h"
 
+#include <QComboBox>
+#include <cstring>
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -23,17 +26,36 @@ namespace up::ui {
 
 void FrameView::setImage(QImage image) {
     image_ = std::move(image);
+    updateDisplayed();
+}
+
+void FrameView::setOverlay(render::ViewerOverlay overlay) {
+    overlay_ = overlay;
+    updateDisplayed();
+}
+
+void FrameView::updateDisplayed() {
+    displayed_ = {};
+    if (overlay_ != render::ViewerOverlay::None && !image_.isNull()) {
+        const QImage rgba = image_.convertToFormat(QImage::Format_RGBA8888);
+        VideoFrame frame(rgba.width(), rgba.height());
+        for (int y = 0; y < rgba.height(); ++y)
+            std::memcpy(frame.row(y), rgba.constScanLine(y), static_cast<std::size_t>(rgba.width()) * 4);
+        render::applyOverlay(frame, overlay_);
+        displayed_ = QImage(frame.pixels.data(), frame.width, frame.height, frame.width * 4, QImage::Format_RGBA8888).copy();
+    }
     update();
 }
 
 void FrameView::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), Qt::black);
-    if (image_.isNull()) return;
-    QSize size = image_.size().scaled(this->size(), Qt::KeepAspectRatio);
+    const QImage& shown = displayedImage();
+    if (shown.isNull()) return;
+    QSize size = shown.size().scaled(this->size(), Qt::KeepAspectRatio);
     const QRect target(QPoint((width() - size.width()) / 2, (height() - size.height()) / 2), size);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.drawImage(target, image_);
+    p.drawImage(target, shown);
 }
 
 ViewerPanel::ViewerPanel(QWidget* parent) : QWidget(parent) {
@@ -71,6 +93,15 @@ ViewerPanel::ViewerPanel(QWidget* parent) : QWidget(parent) {
     makeButton("}", tr("Mark out (O)"), [this] { emit markOutRequested(position_ + 1); });
     makeButton("{×}", tr("Clear marks (Alt+X)"), [this] { emit clearMarksRequested(); });
     bar->addStretch(1);
+    overlayBox_ = new QComboBox(this);
+    overlayBox_->addItems({tr("No overlay"), tr("Clipping"), tr("False color")});
+    overlayBox_->setAccessibleName(tr("Viewer overlay"));
+    overlayBox_->setToolTip(tr("Exposure aids drawn over the picture (never exported)"));
+    overlayBox_->setFocusPolicy(Qt::TabFocus);
+    connect(overlayBox_, &QComboBox::currentIndexChanged, this,
+            [this](int index) { view_->setOverlay(static_cast<render::ViewerOverlay>(std::max(0, index))); });
+    bar->addWidget(overlayBox_);
+    bar->addSpacing(8);
     playbackInfo_ = new QLabel(this);
     playbackInfo_->setAccessibleName(tr("Playback status"));
     bar->addWidget(playbackInfo_);
@@ -148,6 +179,9 @@ bool ViewerPanel::isPlaying() const { return engine_->isRunning(); }
 
 std::optional<render::MixMeters> ViewerPanel::meters() const { return engine_->meters(); }
 const QImage& ViewerPanel::currentImage() const { return view_->image(); }
+const QImage& ViewerPanel::displayedImage() const { return view_->displayedImage(); }
+void ViewerPanel::setOverlay(render::ViewerOverlay overlay) { overlayBox_->setCurrentIndex(static_cast<int>(overlay)); }
+render::ViewerOverlay ViewerPanel::overlay() const { return static_cast<render::ViewerOverlay>(std::max(0, overlayBox_->currentIndex())); }
 
 void ViewerPanel::setPosition(FrameIndex frame) {
     frame = std::max<FrameIndex>(0, frame);

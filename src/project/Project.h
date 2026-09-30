@@ -28,6 +28,8 @@ struct MediaItem {
     // Source in/out marks in seconds from the start of the media ([in, out)).
     std::optional<double> markIn;
     std::optional<double> markOut;
+    // Colour space override; unset = detected from the file's tags (see mediaColorSpace).
+    std::optional<ColorSpace> colorSpace;
 
     // Runtime state, not persisted: whether the file is currently reachable.
     bool online = true;
@@ -49,7 +51,7 @@ struct SequenceSettings {
 
 class Project {
 public:
-    static constexpr int kFormatVersion = 8;
+    static constexpr int kFormatVersion = 9;
 
     std::string id;
     std::string name;
@@ -75,5 +77,9 @@ public:
 };
 
 std::string currentUtcTimestamp();
+
+// The colour space the renderer assumes for a media item: the override, else what
+// its tags say (detectColorSpace).
+ColorSpace mediaColorSpace(const MediaItem& item);
 
 }  // namespace up

@@ -26,6 +26,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QTreeWidget>
 
 #include "ui/ColorPanel.h"
 #include "ui/EffectsDialog.h"
@@ -738,6 +739,78 @@ TEST(Ui, ColorCurvesLutsVersionsAndBypass) {
     EXPECT_EQ(window.session()->missingLuts().size(), 1u);
     color->clearLutButton()->click();
     EXPECT_FALSE(tl.clip(clip)->grade.lut.has_value());
+}
+
+TEST(Ui, ColorManagementMenusAndViewerOverlays) {
+    test::TempDir dir;
+    test::makeMedia(dir / "orange.mp4", test::solid(220, 120, 40, 25));
+    ui::applyTheme(*qApp, ui::ThemeKind::Dark);
+    ui::MainWindow window(nullptr, /*checkRecovery=*/false);
+    window.resize(1400, 900);
+    auto session = EditorSession::createNew("CM", SequenceSettings{FrameRate{25, 1}, 320, 180, 48000});
+    const auto ids = session->importMedia({dir / "orange.mp4"}).importedIds;
+    ASSERT_TRUE(session->appendMedia(ids[0]).ok());
+    window.setSession(std::move(session));
+    window.show();
+    QApplication::processEvents();
+    const Timeline& tl = window.session()->timeline();
+    window.viewer()->setPosition(5);
+    auto centre = [&] {
+        QApplication::processEvents();
+        const QImage img = window.viewer()->currentImage();
+        return img.pixelColor(img.width() / 2, img.height() / 2);
+    };
+    const QColor original = centre();
+
+    // The media pool shows the detected colour space.
+    auto* tree = window.mediaPool()->findChild<QTreeWidget*>();
+    ASSERT_NE(tree, nullptr);
+    ASSERT_EQ(tree->topLevelItemCount(), 1);
+    EXPECT_EQ(tree->topLevelItem(0)->text(3), "Rec.709 (gamma 2.4)");
+
+    // Color ▸ Timeline Color Space ▸ Linear Rec.709: the picture goes dark (shown as linear)...
+    QAction* linear = nullptr;
+    QAction* output709 = nullptr;
+    for (QAction* a : window.findChildren<QAction*>()) {
+        if (a->text() == "Linear Rec.709" && a->parent() && !linear) linear = a;  // first one is in the timeline menu
+    }
+    ASSERT_NE(linear, nullptr);
+    linear->trigger();
+    EXPECT_EQ(tl.colorSpace, (ColorSpace{Primaries::Rec709, Transfer::Linear}));
+    EXPECT_TRUE(linear->isChecked());
+    EXPECT_LT(centre().green(), original.green() - 40);
+    // ...and Output Color Space ▸ Rec.709 (gamma 2.4) brings it back.
+    for (QAction* a : window.findChildren<QAction*>())
+        if (a->text() == "Rec.709 (gamma 2.4)" && a != linear && a->data().toString() == "rec709/bt1886") output709 = a;
+    ASSERT_NE(output709, nullptr);
+    output709->trigger();
+    ASSERT_TRUE(tl.outputColorSpace.has_value());
+    EXPECT_NEAR(centre().green(), original.green(), 2);
+    window.session()->undo();
+    window.session()->undo();
+    EXPECT_EQ(tl.colorSpace, ColorSpace{});
+    EXPECT_FALSE(linear->isChecked());  // menus follow undo
+
+    // Media override from the session (the context menu emits the same request).
+    emit window.mediaPool()->colorSpaceRequested(QString::fromStdString(ids[0]), "rec709/srgb");
+    EXPECT_TRUE(window.session()->project().findMedia(ids[0])->colorSpace.has_value());
+    EXPECT_EQ(tree->topLevelItem(0)->text(3), "sRGB *");
+    EXPECT_GT(centre().green(), original.green());  // sRGB mid-tones are lighter on a gamma 2.4 display
+    emit window.mediaPool()->colorSpaceRequested(QString::fromStdString(ids[0]), {});
+    EXPECT_FALSE(window.session()->project().findMedia(ids[0])->colorSpace.has_value());
+
+    // Viewer overlays change only what is displayed, never the rendered picture.
+    window.viewer()->setOverlay(render::ViewerOverlay::FalseColor);
+    QApplication::processEvents();
+    const QImage shown = window.viewer()->displayedImage();
+    const QImage clean = window.viewer()->currentImage();
+    EXPECT_NE(shown.pixelColor(shown.width() / 2, shown.height() / 2), clean.pixelColor(clean.width() / 2, clean.height() / 2));
+    EXPECT_EQ(clean.pixelColor(clean.width() / 2, clean.height() / 2), original);
+    window.viewer()->setOverlay(render::ViewerOverlay::Clipping);
+    // The letterbox bars are pure black: crushed, so blue.
+    EXPECT_EQ(window.viewer()->displayedImage().pixelColor(2, 2), QColor(0, 80, 255));
+    window.viewer()->setOverlay(render::ViewerOverlay::None);
+    EXPECT_EQ(window.viewer()->displayedImage(), window.viewer()->currentImage());
 }
 
 TEST(Ui, AudioMixerStripsMetersAndEffects) {

@@ -12,6 +12,7 @@
 #include "timeline/EditOperations.h"
 
 class QAction;
+class QActionGroup;
 class QTimer;
 
 namespace up {
@@ -130,6 +131,8 @@ private:
     QAction* redoAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* bypassGradesAction_ = nullptr;
+    QActionGroup* timelineSpaceActions_ = nullptr;
+    QActionGroup* outputSpaceActions_ = nullptr;
     bool exporting_ = false;
 };
 

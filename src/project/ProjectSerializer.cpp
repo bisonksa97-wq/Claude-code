@@ -39,6 +39,8 @@ json toJson(const MediaInfo& i) {
                 {"videoCodec", i.videoCodec},   {"width", i.width},
                 {"height", i.height},           {"frameRate", i.frameRate.toString()},
                 {"pixelFormat", i.pixelFormat}, {"isStill", i.isStill},
+                {"colorPrimaries", i.colorPrimaries}, {"colorTransfer", i.colorTransfer},
+                {"colorMatrix", i.colorMatrix}, {"colorRange", i.colorRange},
                 {"hasAudio", i.hasAudio},       {"audioCodec", i.audioCodec},
                 {"sampleRate", i.sampleRate},   {"channels", i.channels},
                 {"timecode", i.timecode}};
@@ -56,6 +58,10 @@ MediaInfo mediaInfoFromJson(const json& j) {
     i.frameRate = Rational::parse(j.value("frameRate", "0/1"));
     i.pixelFormat = j.value("pixelFormat", "");
     i.isStill = j.value("isStill", false);
+    i.colorPrimaries = j.value("colorPrimaries", "");
+    i.colorTransfer = j.value("colorTransfer", "");
+    i.colorMatrix = j.value("colorMatrix", "");
+    i.colorRange = j.value("colorRange", "");
     i.hasAudio = j.value("hasAudio", false);
     i.audioCodec = j.value("audioCodec", "");
     i.sampleRate = j.value("sampleRate", 0);
@@ -132,6 +138,16 @@ std::optional<Transition> transitionFromJson(const json& j, const char* key) {
 }
 
 // Grade parameters, written like the transform: only non-default values.
+// Colour spaces are written as ids ("rec709/bt1886"). An unknown id (a hand-edited
+// file) falls back to the default with a warning rather than failing the load.
+std::optional<ColorSpace> colorSpaceFromJson(const json& j, const char* key) {
+    if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+    const std::string id = j.at(key).get<std::string>();
+    auto space = ColorSpace::fromId(id);
+    if (!space) UP_LOG_WARN(log::sub::Project, "Unknown colour space '" << id << "'; using Rec.709 (gamma 2.4).");
+    return space.value_or(ColorSpace{});
+}
+
 json lutToJson(const std::optional<LutRef>& lut, const fs::path& baseDir) {
     if (!lut) return nullptr;
     fs::path rel = lut->relativePath;
@@ -288,6 +304,8 @@ json toJson(const Timeline& t, const fs::path& baseDir) {
                 {"markers", toJson(t.markers)},
                 {"outputLut", lutToJson(t.outputLut, baseDir)},
                 {"gradesBypassed", t.gradesBypassed},
+                {"colorSpace", t.colorSpace.id()},
+                {"outputColorSpace", t.outputColorSpace ? json(t.outputColorSpace->id()) : json(nullptr)},
                 {"tracks", tracks}};
 }
 
@@ -308,6 +326,8 @@ Timeline timelineFromJson(const json& j, const fs::path& baseDir) {
     t.markers = markersFromJson(j.value("markers", json::array()));
     t.outputLut = lutFromJson(j, "outputLut", baseDir);
     t.gradesBypassed = j.value("gradesBypassed", false);
+    t.colorSpace = colorSpaceFromJson(j, "colorSpace").value_or(ColorSpace{});
+    t.outputColorSpace = colorSpaceFromJson(j, "outputColorSpace");
     return t;
 }
 
@@ -334,7 +354,8 @@ std::string ProjectSerializer::toJson(const Project& p, const fs::path& projectF
                              {"comment", m.comment},
                              {"importedAt", m.importedAt},
                              {"markIn", optionalToJson(m.markIn)},
-                             {"markOut", optionalToJson(m.markOut)}});
+                             {"markOut", optionalToJson(m.markOut)},
+                             {"colorSpace", m.colorSpace ? json(m.colorSpace->id()) : json(nullptr)}});
     }
     json bins = json::array();
     for (const auto& b : p.bins) bins.push_back(json{{"id", b.id}, {"name", b.name}, {"parentId", b.parentId}});
@@ -397,6 +418,7 @@ Result<Project> ProjectSerializer::fromJson(const std::string& text, const fs::p
             m.importedAt = mj.value("importedAt", "");
             m.markIn = optionalFromJson<double>(mj, "markIn");
             m.markOut = optionalFromJson<double>(mj, "markOut");
+            m.colorSpace = colorSpaceFromJson(mj, "colorSpace");
             p.media.push_back(std::move(m));
         }
         for (const auto& tj : doc.value("timelines", json::array())) {

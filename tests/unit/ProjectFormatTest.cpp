@@ -378,6 +378,50 @@ TEST(ProjectFormat, RoundTripsCurvesLutsVersionsAndMigratesV7) {
     EXPECT_FALSE(migrated.value().timelines[0].outputLut.has_value());
 }
 
+TEST(ProjectFormat, RoundTripsColorSpacesAndMigratesV8) {
+    Project p = sampleProject();
+    p.media[0].colorSpace = ColorSpace{Primaries::ArriWideGamut3, Transfer::LogC3};
+    p.media[0].info.colorPrimaries = "bt709";
+    p.media[0].info.colorTransfer = "bt709";
+    p.media[0].info.colorRange = "tv";
+    p.timelines[0].colorSpace = ColorSpace{Primaries::Rec2020, Transfer::Linear};
+    p.timelines[0].outputColorSpace = ColorSpace{Primaries::Rec2020, Transfer::PQ};
+    const auto doc = nlohmann::json::parse(ProjectSerializer::toJson(p));
+    EXPECT_EQ(doc["media"][0]["colorSpace"], "awg3/logc3");
+    EXPECT_EQ(doc["timelines"][0]["colorSpace"], "rec2020/linear");
+    EXPECT_EQ(doc["timelines"][0]["outputColorSpace"], "rec2020/pq");
+    auto loaded = ProjectSerializer::fromJson(doc.dump());
+    ASSERT_TRUE(loaded.ok()) << loaded.error().toString();
+    EXPECT_EQ(loaded.value().media[0].colorSpace, p.media[0].colorSpace);
+    EXPECT_EQ(loaded.value().media[0].info.colorTransfer, "bt709");
+    EXPECT_EQ(loaded.value().media[0].info.colorRange, "tv");
+    EXPECT_EQ(loaded.value().timelines[0].colorSpace, p.timelines[0].colorSpace);
+    EXPECT_EQ(loaded.value().timelines[0].outputSpace(), (ColorSpace{Primaries::Rec2020, Transfer::PQ}));
+    // Effective media space: the override wins over the tags.
+    EXPECT_EQ(mediaColorSpace(loaded.value().media[0]), (ColorSpace{Primaries::ArriWideGamut3, Transfer::LogC3}));
+
+    // v8 documents: Rec.709 gamma 2.4 timelines with the output in the same space; media detected.
+    auto old = nlohmann::json::parse(ProjectSerializer::toJson(sampleProject()));
+    old["formatVersion"] = 8;
+    old["timelines"][0].erase("colorSpace");
+    old["timelines"][0].erase("outputColorSpace");
+    old["media"][0].erase("colorSpace");
+    for (const char* key : {"colorPrimaries", "colorTransfer", "colorMatrix", "colorRange"}) old["media"][0]["info"].erase(key);
+    auto migrated = ProjectSerializer::fromJson(old.dump());
+    ASSERT_TRUE(migrated.ok()) << migrated.error().toString();
+    EXPECT_EQ(migrated.value().timelines[0].colorSpace, (ColorSpace{Primaries::Rec709, Transfer::BT1886}));
+    EXPECT_FALSE(migrated.value().timelines[0].outputColorSpace.has_value());
+    EXPECT_FALSE(migrated.value().media[0].colorSpace.has_value());
+    EXPECT_EQ(mediaColorSpace(migrated.value().media[0]), (ColorSpace{Primaries::Rec709, Transfer::BT1886}));
+
+    // An unknown id (hand-edited file) falls back to the default instead of failing.
+    auto odd = doc;
+    odd["timelines"][0]["colorSpace"] = "rec709/nonsense";
+    auto tolerated = ProjectSerializer::fromJson(odd.dump());
+    ASSERT_TRUE(tolerated.ok());
+    EXPECT_EQ(tolerated.value().timelines[0].colorSpace, ColorSpace{});
+}
+
 TEST(ProjectMigrator, AppliesStepsInOrder) {
     ProjectMigrator m(3);
     m.addStep(1, [](nlohmann::json& d) {

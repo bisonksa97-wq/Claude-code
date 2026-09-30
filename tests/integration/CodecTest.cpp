@@ -4,6 +4,11 @@
 #include <fstream>
 #include <vector>
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
+
 #include "codec/AudioDecoder.h"
 #include "codec/MediaProbe.h"
 #include "codec/MediaWriter.h"
@@ -168,4 +173,93 @@ TEST_F(CodecTest, WriterFallsBackAndValidates) {
     auto info = probeMedia(*dir / "mpeg4.mp4");
     ASSERT_TRUE(info.ok());
     EXPECT_EQ(info.value().videoCodec, "mpeg4");
+}
+
+namespace {
+
+// Y, Cb, Cr at the centre of the first decoded frame, read straight from libav (no
+// RGB conversion), so the encoder's matrix is checked independently of our decoder.
+std::array<int, 3> firstFrameYuv(const std::filesystem::path& path) {
+    AVFormatContext* fmt = nullptr;
+    EXPECT_GE(avformat_open_input(&fmt, path.string().c_str(), nullptr, nullptr), 0);
+    avformat_find_stream_info(fmt, nullptr);
+    const int index = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    const AVCodec* codec = avcodec_find_decoder(fmt->streams[index]->codecpar->codec_id);
+    AVCodecContext* ctx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(ctx, fmt->streams[index]->codecpar);
+    avcodec_open2(ctx, codec, nullptr);
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    std::array<int, 3> yuv{-1, -1, -1};
+    bool done = false;
+    while (!done && av_read_frame(fmt, packet) >= 0) {
+        if (packet->stream_index == index && avcodec_send_packet(ctx, packet) >= 0 && avcodec_receive_frame(ctx, frame) >= 0) done = true;
+        av_packet_unref(packet);
+    }
+    if (!done) {
+        avcodec_send_packet(ctx, nullptr);
+        done = avcodec_receive_frame(ctx, frame) >= 0;
+    }
+    if (done) {
+        const int x = frame->width / 2, y = frame->height / 2;
+        yuv = {frame->data[0][y * frame->linesize[0] + x], frame->data[1][(y / 2) * frame->linesize[1] + x / 2],
+               frame->data[2][(y / 2) * frame->linesize[2] + x / 2]};
+    }
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    return yuv;
+}
+
+}  // namespace
+
+TEST(CodecColor, YuvMatrixAndTagsFollowTheSettings) {
+    test::TempDir dir;
+    VideoFrame red(64, 64);
+    red.fill(255, 0, 0);
+    auto encode = [&](const std::string& name, const std::string& matrix, const std::string& primaries, const std::string& transfer) {
+        EncodeSettings s;
+        s.width = 64;
+        s.height = 64;
+        s.audio = false;
+        s.colorMatrix = matrix;
+        s.colorPrimaries = primaries;
+        s.colorTransfer = transfer;
+        auto writer = MediaWriter::open(dir / name, s);
+        EXPECT_TRUE(writer.ok());
+        for (int i = 0; i < 5; ++i) EXPECT_TRUE(writer.value()->writeVideo(red).ok());
+        EXPECT_TRUE(writer.value()->finish().ok());
+        return dir / name;
+    };
+    // BT.709 limited range: red = Y 63, Cb 102, Cr 240 (BT.601 would give Y 81, Cb 90).
+    const auto hd = encode("709.mp4", "bt709", "bt709", "bt709");
+    const auto yuv709 = firstFrameYuv(hd);
+    EXPECT_NEAR(yuv709[0], 63, 2);
+    EXPECT_NEAR(yuv709[1], 102, 2);
+    EXPECT_NEAR(yuv709[2], 240, 2);
+    const auto sd = encode("601.mp4", "smpte170m", "smpte170m", "smpte170m");
+    const auto yuv601 = firstFrameYuv(sd);
+    EXPECT_NEAR(yuv601[0], 81, 2);
+    EXPECT_NEAR(yuv601[1], 90, 2);
+    // Tags are written, and our decoder uses them to get the RGB back either way.
+    for (const auto& file : {hd, sd}) {
+        auto info = probeMedia(file);
+        ASSERT_TRUE(info.ok());
+        EXPECT_EQ(info.value().colorRange, "tv");
+        auto decoder = VideoDecoder::open(file);
+        ASSERT_TRUE(decoder.ok());
+        const auto rgb = test::averageColor(decoder.value()->frameAt(0.0).value());
+        EXPECT_NEAR(rgb.r, 255, 4);
+        EXPECT_NEAR(rgb.g, 0, 4);
+        EXPECT_NEAR(rgb.b, 0, 4);
+    }
+    EXPECT_EQ(probeMedia(hd).value().colorMatrix, "bt709");
+    EXPECT_EQ(probeMedia(sd).value().colorMatrix, "smpte170m");
+    EncodeSettings bad;
+    bad.width = 64;
+    bad.height = 64;
+    bad.audio = false;
+    bad.colorTransfer = "not-a-transfer";
+    EXPECT_FALSE(MediaWriter::open(dir / "bad.mp4", bad).ok());
 }

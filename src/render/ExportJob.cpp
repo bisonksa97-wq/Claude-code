@@ -38,6 +38,10 @@ Status ExportJob::run(const ProgressFn& progress) {
     settings.height = timeline->height;
     settings.frameRate = timeline->frameRate;
     settings.videoCodec = options_.videoCodec;
+    const ColorTags tags = colorTagsFor(timeline->outputSpace());  // what the file says about its colour
+    settings.colorPrimaries = tags.primaries;
+    settings.colorTransfer = tags.transfer;
+    settings.colorMatrix = tags.matrix;
     settings.crf = options_.crf;
     settings.videoBitrate = options_.videoBitrate;
     settings.audio = options_.includeAudio;

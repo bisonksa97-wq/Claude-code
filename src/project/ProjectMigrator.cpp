@@ -91,6 +91,16 @@ const ProjectMigrator& ProjectMigrator::standard() {
             }
             return Status::success();
         });
+        // v8 -> v9: colour management. Timelines work in Rec.709 (gamma 2.4) with the
+        // output in the same space; media use the space detected from their tags.
+        m.addStep(8, [](nlohmann::json& doc) {
+            for (auto& tl : doc["timelines"]) {
+                tl["colorSpace"] = "rec709/bt1886";
+                tl["outputColorSpace"] = nullptr;
+            }
+            for (auto& media : doc["media"]) media["colorSpace"] = nullptr;
+            return Status::success();
+        });
         return m;
     }();
     return migrator;

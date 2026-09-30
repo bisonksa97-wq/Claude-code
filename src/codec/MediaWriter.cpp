@@ -7,6 +7,7 @@
 extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -37,6 +38,7 @@ struct MediaWriter::Impl {
     ffmpeg::FramePtr audioFrame{av_frame_alloc()};
     ffmpeg::PacketPtr packet{av_packet_alloc()};
     SwsContext* sws = nullptr;
+    const SwsContext* configuredSws = nullptr;  // sws with the YUV matrix set
     std::vector<uint8_t> scratch;  // padded RGBA copy for swscale
     int64_t videoPts = 0;
     int64_t audioPts = 0;
@@ -151,6 +153,22 @@ Result<std::unique_ptr<MediaWriter>> MediaWriter::open(const std::filesystem::pa
         v->time_base = AVRational{static_cast<int>(s.frameRate.den), static_cast<int>(s.frameRate.num)};
         v->framerate = AVRational{static_cast<int>(s.frameRate.num), static_cast<int>(s.frameRate.den)};
         v->pix_fmt = AV_PIX_FMT_YUV420P;
+        v->color_range = AVCOL_RANGE_MPEG;
+        if (!s.colorPrimaries.empty()) {
+            const int value = av_color_primaries_from_name(s.colorPrimaries.c_str());
+            if (value < 0) return makeError(ErrorCode::InvalidArgument, "codec", "Unknown colour primaries '" + s.colorPrimaries + "'.");
+            v->color_primaries = static_cast<AVColorPrimaries>(value);
+        }
+        if (!s.colorTransfer.empty()) {
+            const int value = av_color_transfer_from_name(s.colorTransfer.c_str());
+            if (value < 0) return makeError(ErrorCode::InvalidArgument, "codec", "Unknown transfer function '" + s.colorTransfer + "'.");
+            v->color_trc = static_cast<AVColorTransferCharacteristic>(value);
+        }
+        if (!s.colorMatrix.empty()) {
+            const int value = av_color_space_from_name(s.colorMatrix.c_str());
+            if (value < 0) return makeError(ErrorCode::InvalidArgument, "codec", "Unknown colour matrix '" + s.colorMatrix + "'.");
+            v->colorspace = static_cast<AVColorSpace>(value);
+        }
         v->gop_size = std::max(1, static_cast<int>(s.frameRate.toDouble() * 2));
         if (s.videoBitrate > 0) v->bit_rate = s.videoBitrate;
         else if (s.videoCodec == "mpeg4") v->bit_rate = static_cast<int64_t>(s.width) * s.height * 4;
@@ -222,6 +240,13 @@ Status MediaWriter::writeVideo(const VideoFrame& frame) {
     if (err < 0) return m.encodeError("the frame buffer is busy", err);
     m.sws = sws_getCachedContext(m.sws, frame.width, frame.height, AV_PIX_FMT_RGBA, frame.width, frame.height,
                                  AV_PIX_FMT_YUV420P, SWS_BICUBIC, nullptr, nullptr, nullptr);
+    if (!m.sws) return makeError(ErrorCode::EncodeError, "codec", "Unable to convert the frame to YUV for encoding.");
+    if (m.sws != m.configuredSws) {
+        // Full-range RGB in, limited-range YUV out with the tagged matrix (swscale's default is BT.601).
+        const int* coefficients = sws_getCoefficients(ffmpeg::swsMatrixForName(m.settings.colorMatrix));
+        sws_setColorspaceDetails(m.sws, coefficients, 1, coefficients, 0, 0, 1 << 16, 1 << 16);
+        m.configuredSws = m.sws;
+    }
     // Read from padded scratch memory: swscale may read past the end of a tightly packed row.
     const int stride = ffmpeg::alignedStride(frame.width * 4);
     m.scratch.resize(static_cast<std::size_t>(stride) * frame.height + ffmpeg::kSwsAlign);

@@ -5,6 +5,7 @@
 extern "C" {
 #include <libavutil/log.h>
 #include <libavutil/pixdesc.h>
+#include <libswscale/swscale.h>
 }
 
 #include "codec/FFmpegCommon.h"
@@ -16,6 +17,24 @@ namespace ffmpeg {
 void initialize() {
     static std::once_flag once;
     std::call_once(once, [] { av_log_set_level(AV_LOG_ERROR); });
+}
+
+int swsMatrixFor(AVColorSpace space, int height) {
+    switch (space) {
+        case AVCOL_SPC_BT709: return SWS_CS_ITU709;
+        case AVCOL_SPC_BT2020_NCL:
+        case AVCOL_SPC_BT2020_CL: return SWS_CS_BT2020;
+        case AVCOL_SPC_SMPTE240M: return SWS_CS_SMPTE240M;
+        case AVCOL_SPC_FCC: return SWS_CS_FCC;
+        case AVCOL_SPC_SMPTE170M:
+        case AVCOL_SPC_BT470BG: return SWS_CS_ITU601;
+        default: return height >= 720 ? SWS_CS_ITU709 : SWS_CS_ITU601;
+    }
+}
+
+int swsMatrixForName(const std::string& name) {
+    const int space = name.empty() ? -1 : av_color_space_from_name(name.c_str());
+    return space < 0 ? SWS_CS_ITU709 : swsMatrixFor(static_cast<AVColorSpace>(space), 1080);
 }
 }  // namespace ffmpeg
 
@@ -61,6 +80,11 @@ Result<MediaInfo> probeMedia(const std::filesystem::path& path) {
             const AVRational fr = s->avg_frame_rate.num > 0 ? s->avg_frame_rate : s->r_frame_rate;
             info.frameRate = Rational(fr.num, fr.den > 0 ? fr.den : 1);
             if (const char* pf = av_get_pix_fmt_name(static_cast<AVPixelFormat>(par->format))) info.pixelFormat = pf;
+            auto tag = [](const char* name, bool specified) { return specified && name ? std::string(name) : std::string(); };
+            info.colorPrimaries = tag(av_color_primaries_name(par->color_primaries), par->color_primaries != AVCOL_PRI_UNSPECIFIED);
+            info.colorTransfer = tag(av_color_transfer_name(par->color_trc), par->color_trc != AVCOL_TRC_UNSPECIFIED);
+            info.colorMatrix = tag(av_color_space_name(par->color_space), par->color_space != AVCOL_SPC_UNSPECIFIED);
+            info.colorRange = tag(av_color_range_name(par->color_range), par->color_range != AVCOL_RANGE_UNSPECIFIED);
             // Image formats (png, jpeg...) demux as a single frame: treat them as stills.
             const std::string demuxer = info.container;
             info.isStill = demuxer.find("_pipe") != std::string::npos || demuxer == "image2" ||

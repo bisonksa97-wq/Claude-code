@@ -8,7 +8,9 @@
 
 #include "core/Rational.h"
 #include "render/AudioMixer.h"
+#include "render/ViewerOverlay.h"
 
+class QComboBox;
 class QLabel;
 class QTimer;
 class QToolButton;
@@ -34,13 +36,18 @@ class FrameView : public QWidget {
 public:
     using QWidget::QWidget;
     void setImage(QImage image);
-    const QImage& image() const { return image_; }
+    const QImage& image() const { return image_; }  // the picture as rendered
+    void setOverlay(render::ViewerOverlay overlay);
+    const QImage& displayedImage() const { return overlay_ == render::ViewerOverlay::None ? image_ : displayed_; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    void updateDisplayed();
     QImage image_;
+    QImage displayed_;  // image_ with the overlay
+    render::ViewerOverlay overlay_ = render::ViewerOverlay::None;
 };
 
 // Horizontal position bar: shows the playhead and the in/out marks, click or drag to seek.
@@ -98,7 +105,10 @@ public:
     bool isPlaying() const;
     int droppedFrames() const;
     bool playingWithAudio() const;
-    const QImage& currentImage() const;
+    const QImage& currentImage() const;  // without overlays (scopes use it)
+    const QImage& displayedImage() const;
+    void setOverlay(render::ViewerOverlay overlay);
+    render::ViewerOverlay overlay() const;
     // Levels of what is being heard (nullopt when not playing).
     std::optional<render::MixMeters> meters() const;
 
@@ -140,6 +150,7 @@ private:
     FrameView* view_ = nullptr;
     QLabel* timecode_ = nullptr;
     QLabel* playbackInfo_ = nullptr;
+    QComboBox* overlayBox_ = nullptr;
     std::unique_ptr<playback::PlaybackEngine> engine_;
     QToolButton* playButton_ = nullptr;
     QTimer* timer_ = nullptr;

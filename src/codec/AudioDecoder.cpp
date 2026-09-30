@@ -186,9 +186,11 @@ Result<std::unique_ptr<AudioDecoder>> AudioDecoder::open(const std::filesystem::
     if ((err = avcodec_open2(impl->codec.get(), decoder, nullptr)) < 0)
         return impl->decodeError("the audio decoder could not be opened", err);
 
-    AVChannelLayout outLayout;
+    // Zero-initialised: av_channel_layout_copy uninitialises its destination first, so
+    // stack garbage there would be freed (an intermittent crash seen in Release builds).
+    AVChannelLayout outLayout{};
     av_channel_layout_default(&outLayout, outChannels);
-    AVChannelLayout inLayout;
+    AVChannelLayout inLayout{};
     if (impl->codec->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC || impl->codec->ch_layout.nb_channels == 0) {
         av_channel_layout_default(&inLayout, std::max(1, impl->codec->ch_layout.nb_channels));
     } else {

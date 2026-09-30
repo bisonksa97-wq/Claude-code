@@ -15,6 +15,7 @@ up_add_test(unit_tests
     unit/AnimationCompositingTest.cpp
     unit/AudioEffectsTest.cpp
     unit/CacheJobsTest.cpp
+    unit/ColorManagementTest.cpp
     unit/ColorTest.cpp
     unit/CoreTest.cpp
     unit/CurvesLutTest.cpp

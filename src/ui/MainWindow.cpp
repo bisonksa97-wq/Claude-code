@@ -137,6 +137,10 @@ MainWindow::MainWindow(QWidget* parent, bool checkRecovery) : QMainWindow(parent
     setActiveViewer(viewer_);
     connect(mediaPool_, &MediaPoolPanel::importRequested, this, &MainWindow::importMedia);
     connect(mediaPool_, &MediaPoolPanel::relinkRequested, this, &MainWindow::relinkMedia);
+    connect(mediaPool_, &MediaPoolPanel::colorSpaceRequested, this, [this](const QString& id, const QString& spaceId) {
+        const auto space = ColorSpace::fromId(spaceId.toStdString());
+        runEdit([&] { return session_->setMediaColorSpace(id.toStdString(), spaceId.isEmpty() ? std::nullopt : space); });
+    });
 
     autosaveTimer_ = new QTimer(this);
     connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::autosave);
@@ -356,6 +360,32 @@ void MainWindow::buildMenus() {
     });
     add(color, tr("Clear Output LUT"), QKeySequence(), [this] { setOutputLut({}); });
     add(color, tr("Relink Missing LUTs…"), QKeySequence(), &MainWindow::relinkMissingLuts);
+    color->addSeparator();
+    QMenu* timelineSpace = color->addMenu(tr("Timeline Color Space"));
+    QMenu* outputSpace = color->addMenu(tr("Output Color Space"));
+    auto* timelineGroup = new QActionGroup(this);
+    auto* outputGroup = new QActionGroup(this);
+    QAction* same = outputSpace->addAction(tr("Same as Timeline"));
+    same->setCheckable(true);
+    same->setData(QString());
+    outputGroup->addAction(same);
+    connect(same, &QAction::triggered, this, [this] { runEdit([&] { return session_->setOutputColorSpace(std::nullopt); }); });
+    outputSpace->addSeparator();
+    for (const auto& preset : colorSpacePresets()) {
+        const ColorSpace space = preset.space;
+        QAction* t = timelineSpace->addAction(QString::fromUtf8(preset.name));
+        t->setCheckable(true);
+        t->setData(QString::fromStdString(space.id()));
+        timelineGroup->addAction(t);
+        connect(t, &QAction::triggered, this, [this, space] { runEdit([&] { return session_->setTimelineColorSpace(space); }); });
+        QAction* o = outputSpace->addAction(QString::fromUtf8(preset.name));
+        o->setCheckable(true);
+        o->setData(QString::fromStdString(space.id()));
+        outputGroup->addAction(o);
+        connect(o, &QAction::triggered, this, [this, space] { runEdit([&] { return session_->setOutputColorSpace(space); }); });
+    }
+    timelineSpaceActions_ = timelineGroup;
+    outputSpaceActions_ = outputGroup;
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     add(view, tr("Zoom In"), QKeySequence("="), [this] { timeline()->zoomIn(); });
@@ -389,6 +419,11 @@ void MainWindow::updateTitleAndActions() {
     redoAction_->setEnabled(h.canRedo());
     redoAction_->setText(h.canRedo() ? tr("&Redo %1").arg(qs(h.redoName())) : tr("&Redo"));
     bypassGradesAction_->setChecked(session_->timeline().gradesBypassed);
+    // Colour-space menus follow the model (including undo).
+    const Timeline& tl = session_->timeline();
+    for (QAction* a : timelineSpaceActions_->actions()) a->setChecked(a->data().toString() == qs(tl.colorSpace.id()));
+    const QString output = tl.outputColorSpace ? qs(tl.outputColorSpace->id()) : QString();
+    for (QAction* a : outputSpaceActions_->actions()) a->setChecked(a->data().toString() == output);
 }
 
 void MainWindow::showError(const QString& summary, const QString& details) {

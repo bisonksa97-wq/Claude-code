@@ -8,6 +8,7 @@
 #include "audio/AudioEffect.h"
 #include "core/Result.h"
 #include "timeline/Animation.h"
+#include "timeline/ColorSpace.h"
 #include "timeline/Grade.h"
 
 namespace up {
@@ -134,6 +135,12 @@ public:
     // and a switch that renders every clip without its grade.
     std::optional<LutRef> outputLut;
     bool gradesBypassed = false;
+    // Colour management: sources are converted into the timeline colour space, where
+    // grading and compositing happen; the picture is converted to the output colour
+    // space (unset = the timeline space) for viewing and export.
+    ColorSpace colorSpace;
+    std::optional<ColorSpace> outputColorSpace;
+    ColorSpace outputSpace() const { return outputColorSpace.value_or(colorSpace); }
 
     // Creates a timeline with `videoTracks` video and `audioTracks` audio tracks.
     static Timeline create(std::string name, FrameRate rate, int width, int height, int sampleRate,

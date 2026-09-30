@@ -1376,6 +1376,31 @@ Result<int> EditorSession::relinkLut(const fs::path& oldPath, const fs::path& ne
     return changed;
 }
 
+Status EditorSession::setMediaColorSpace(const std::string& mediaId, std::optional<ColorSpace> space) {
+    const MediaItem* item = project_.findMedia(mediaId);
+    if (!item) return makeError(ErrorCode::NotFound, "media", "The media item does not exist.");
+    if (!item->info.hasVideo) {
+        return makeError(ErrorCode::InvalidArgument, "color", "'" + item->name + "' has no picture, so it has no colour space.");
+    }
+    MediaItem updated = *item;
+    updated.colorSpace = space;
+    return history_.execute(std::make_unique<UpdateMediaCommand>(project_, std::move(updated), "Set Media Colour Space"));
+}
+
+Status EditorSession::setTimelineColorSpace(ColorSpace space) {
+    return editTimeline("Timeline Colour Space", [&](Timeline& t) -> Status {
+        t.colorSpace = space;
+        return Status::success();
+    });
+}
+
+Status EditorSession::setOutputColorSpace(std::optional<ColorSpace> space) {
+    return editTimeline("Output Colour Space", [&](Timeline& t) -> Status {
+        t.outputColorSpace = space;
+        return Status::success();
+    });
+}
+
 std::vector<fs::path> EditorSession::missingLuts() const {
     std::vector<fs::path> out;
     for (const auto& path : render::lutsUsedBy(timeline())) {

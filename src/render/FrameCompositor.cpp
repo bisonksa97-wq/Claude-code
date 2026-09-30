@@ -6,6 +6,7 @@
 
 #include "core/Log.h"
 #include "render/ColorGrading.h"
+#include "render/ColorManagement.h"
 #include "render/Compositing.h"
 #include "timeline/Transitions.h"
 
@@ -76,20 +77,25 @@ std::optional<Layer> makeLayer(const Clip& clip, const MediaItem* media, const T
     return l;
 }
 
-void mix(VideoFrame& canvas, const VideoFrame& withOutgoing, const VideoFrame& withIncoming,
-         const transitions::VideoWeights& w) {
-    for (std::size_t i = 0; i < canvas.pixels.size(); i += 4) {
-        for (std::size_t c = 0; c < 3; ++c) {
-            const double v = withOutgoing.pixels[i + c] * w.outgoing + canvas.pixels[i + c] * w.below +
-                             withIncoming.pixels[i + c] * w.incoming;
-            canvas.pixels[i + c] = static_cast<uint8_t>(std::clamp(std::lround(v), 0L, 255L));
+// Weights that sum to less than one (a dip) fade towards `black`, the encoded value
+// of linear 0 in the timeline space (not 0 for log encodings).
+void mix(FloatFrame& canvas, const FloatFrame& withOutgoing, const FloatFrame& withIncoming,
+         const transitions::VideoWeights& w, float black) {
+    parallelRows(canvas.height, static_cast<std::size_t>(canvas.width) * 4, [&](int y0, int y1) {
+        const std::size_t end = static_cast<std::size_t>(y1) * canvas.width * 4;
+        for (std::size_t i = static_cast<std::size_t>(y0) * canvas.width * 4; i < end; i += 4) {
+            for (std::size_t c = 0; c < 3; ++c) {
+                const double v = black + (withOutgoing.pixels[i + c] - black) * w.outgoing +
+                                 (canvas.pixels[i + c] - black) * w.below + (withIncoming.pixels[i + c] - black) * w.incoming;
+                canvas.pixels[i + c] = static_cast<float>(v);
+            }
         }
-    }
+    });
 }
 
 }  // namespace
 
-Status FrameCompositor::drawLayer(VideoFrame& canvas, const Layer& l, const Timeline& timeline, FrameIndex frame) {
+Status FrameCompositor::drawLayer(FloatFrame& canvas, const Layer& l, const Timeline& timeline, FrameIndex frame) {
     const int outWidth = canvas.width;
     const int outHeight = canvas.height;
     const double outScale = static_cast<double>(outWidth) / timeline.width;
@@ -115,27 +121,29 @@ Status FrameCompositor::drawLayer(VideoFrame& canvas, const Layer& l, const Time
             UP_LOG_WARN(log::sub::Render, decoder.error().message);
         }
     }
+    FloatFrame layer;
     if (image.empty()) {
-        image = VideoFrame(dw, dh);
-        image.fill(kOfflineColor[0], kOfflineColor[1], kOfflineColor[2]);
+        layer = FloatFrame(dw, dh);  // offline placeholder, in the timeline space
+        layer.fill(kOfflineColor[0] / 255.0f, kOfflineColor[1] / 255.0f, kOfflineColor[2] / 255.0f);
     } else {
-        // Grade the source picture, before it is transformed and composited.
+        // Into the timeline colour space, then grade there, before transform and compositing.
+        layer = ColorConversion(mediaColorSpace(*l.media), timeline.colorSpace).convert(image);
         if (!timeline.gradesBypassed && !l.clip->gradeBypass && !l.clip->grade.isIdentity()) {
-            applyGrade(image, evaluateGrade(l.clip->grade, l.clip->toSource(frame)), l.clip->grade.curves,
-                       lut(l.clip->grade.lut));
+            applyGrade(layer, evaluateGrade(l.clip->grade, l.clip->toSource(frame)), l.clip->grade.curves,
+                       lut(l.clip->grade.lut), timeline.colorSpace.transfer);
         }
     }
     LayerPlacement placement;
     placement.centerX = outWidth / 2.0 + l.posX * outScale;
     placement.centerY = outHeight / 2.0 + l.posY * outScale;
-    placement.scale = canvasPerSource * l.sourceWidth / image.width;
+    placement.scale = canvasPerSource * l.sourceWidth / layer.width;
     placement.rotationDegrees = l.rotation;
     placement.opacity = l.opacity;
     placement.cropLeft = l.cropL;
     placement.cropRight = l.cropR;
     placement.cropTop = l.cropT;
     placement.cropBottom = l.cropB;
-    compositeOver(canvas, image, placement);
+    compositeOver(canvas, layer, placement);
     return Status::success();
 }
 
@@ -144,8 +152,10 @@ Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex 
         outWidth = timeline.width;
         outHeight = timeline.height;
     }
-    VideoFrame canvas(outWidth, outHeight);
-    canvas.fill(0, 0, 0);
+    // Everything is composited in float, in the timeline colour space, over its black.
+    const auto black = static_cast<float>(encodeTransfer(timeline.colorSpace.transfer, 0.0));
+    FloatFrame canvas(outWidth, outHeight);
+    canvas.fill(black, black, black);
     auto resolve = [&](const Clip& c) { return resolver_ ? resolver_(c.mediaId) : nullptr; };
 
     // What each enabled video track shows at this frame, bottom (V1) to top.
@@ -185,8 +195,8 @@ Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex 
         // Transition: mix "below + outgoing", "below" and "below + incoming".
         // The regions vector lives in `plan`, so the region pointer stays valid here.
         const transitions::Region& region = *plan.frame.region;
-        VideoFrame withOutgoing = canvas;
-        VideoFrame withIncoming = canvas;
+        FloatFrame withOutgoing = canvas;
+        FloatFrame withIncoming = canvas;
         if (region.outgoing) {
             if (auto l = makeLayer(*region.outgoing, resolve(*region.outgoing), timeline, frame))
                 UP_TRY(drawLayer(withOutgoing, *l, timeline, frame));
@@ -195,10 +205,12 @@ Result<VideoFrame> FrameCompositor::render(const Timeline& timeline, FrameIndex 
             if (auto l = makeLayer(*region.incoming, resolve(*region.incoming), timeline, frame))
                 UP_TRY(drawLayer(withIncoming, *l, timeline, frame));
         }
-        mix(canvas, withOutgoing, withIncoming, transitions::videoWeights(region.kind, plan.frame.progress));
+        mix(canvas, withOutgoing, withIncoming, transitions::videoWeights(region.kind, plan.frame.progress), black);
     }
+    // Output transform, then the output LUT, then the one and only quantisation.
+    ColorConversion(timeline.colorSpace, timeline.outputSpace()).apply(canvas);
     if (const Lut* output = lut(timeline.outputLut)) applyLut(canvas, *output);
-    return canvas;
+    return toVideoFrame(canvas);
 }
 
 const Lut* FrameCompositor::lut(const std::optional<LutRef>& ref) {

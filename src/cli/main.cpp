@@ -188,6 +188,11 @@ Colour grades (video clips; params: liftMaster liftR liftG liftB gammaMaster gam
   grade <project> <clip> lut <file.cube>|none
   grade <project> <clip> bypass on|off
   grade <project> <clip> version add|use|delete <name>
+  color-spaces                                      list colour spaces (id and name)
+  color-space <project>                             show timeline, output and media colour spaces
+  color-space <project> timeline <space>            working space for grading and compositing
+  color-space <project> output <space>|same         viewing/export space (tags the exported file)
+  color-space <project> media <media> <space>|auto  override the space detected from the file's tags
   output-lut <project> <file.cube>|none             LUT on the whole composited picture
   bypass-grades <project> on|off                    render every clip without its grade
   relink-lut <project> <old path> <new file>        repoint every use of a moved LUT
@@ -640,6 +645,53 @@ int main(int argc, char** argv) {
         return saveAndReport(session, "Updated " + std::string(gradeInfo(*param).id));
     }};
 
+    auto parseSpace = [](const std::string& id) { return ColorSpace::fromId(id); };
+
+    commands["color-spaces"] = {0, [&](const cli::Args&) {
+        for (const auto& p : colorSpacePresets()) std::cout << p.space.id() << "  " << p.name << "\n";
+        std::cout << "(short names: rec709 srgb linear p3 rec2020 pq hlg logc3 slog3)\n";
+        return 0;
+    }};
+
+    commands["color-space"] = {1, [&](const cli::Args&) {
+        auto s = openProject(pos[0]);
+        if (!s.ok()) return fail(s.error());
+        EditorSession& session = *s.value();
+        const Timeline& tl = session.timeline();
+        if (pos.size() == 1) {
+            std::cout << "timeline = " << tl.colorSpace.id() << " (" << tl.colorSpace.displayName() << ")\n";
+            std::cout << "output = " << tl.outputSpace().id() << (tl.outputColorSpace ? "" : " (same as timeline)") << "\n";
+            for (const auto& m : session.project().media) {
+                if (!m.info.hasVideo) continue;
+                std::cout << "media " << m.name << " = " << mediaColorSpace(m).id() << (m.colorSpace ? " (set)" : " (detected)")
+                          << "  tags: " << (m.info.colorPrimaries.empty() ? "-" : m.info.colorPrimaries) << "/"
+                          << (m.info.colorTransfer.empty() ? "-" : m.info.colorTransfer) << "\n";
+            }
+            return 0;
+        }
+        const std::string& target = pos[1];
+        Status st = Status::success();
+        if (target == "timeline" && pos.size() >= 3) {
+            const auto space = parseSpace(pos[2]);
+            if (!space) return usageError("unknown colour space '" + pos[2] + "' (see 'ultimatepost color-spaces')");
+            st = session.setTimelineColorSpace(*space);
+        } else if (target == "output" && pos.size() >= 3) {
+            const auto space = parseSpace(pos[2]);
+            if (pos[2] != "same" && !space) return usageError("unknown colour space '" + pos[2] + "'");
+            st = session.setOutputColorSpace(pos[2] == "same" ? std::nullopt : space);
+        } else if (target == "media" && pos.size() >= 4) {
+            auto media = resolveMedia(session.project(), pos[2]);
+            if (!media.ok()) return fail(media.error());
+            const auto space = parseSpace(pos[3]);
+            if (pos[3] != "auto" && !space) return usageError("unknown colour space '" + pos[3] + "'");
+            st = session.setMediaColorSpace(media.value(), pos[3] == "auto" ? std::nullopt : space);
+        } else {
+            return usageError("use: color-space <project> [timeline <space> | output <space>|same | media <media> <space>|auto]");
+        }
+        if (!st.ok()) return fail(st.error());
+        return saveAndReport(session, "Updated the " + target + " colour space");
+    }};
+
     commands["output-lut"] = {2, [&](const cli::Args&) {
         auto s = openProject(pos[0]);
         if (!s.ok()) return fail(s.error());
@@ -964,7 +1016,10 @@ int main(int argc, char** argv) {
         if (i.hasVideo)
             std::cout << "\nvideo_codec=" << i.videoCodec << "\nwidth=" << i.width << "\nheight=" << i.height
                       << "\nframe_rate=" << i.frameRate.toString() << "\npixel_format=" << i.pixelFormat
-                      << "\nstill=" << i.isStill;
+                      << "\nstill=" << i.isStill << "\ncolor_primaries=" << i.colorPrimaries
+                      << "\ncolor_transfer=" << i.colorTransfer << "\ncolor_matrix=" << i.colorMatrix
+                      << "\ncolor_range=" << i.colorRange
+                      << "\ncolor_space=" << detectColorSpace(i.colorPrimaries, i.colorTransfer, i.isStill).id();
         std::cout << "\naudio=" << i.hasAudio;
         if (i.hasAudio)
             std::cout << "\naudio_codec=" << i.audioCodec << "\nsample_rate=" << i.sampleRate << "\nchannels=" << i.channels;

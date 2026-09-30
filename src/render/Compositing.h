@@ -1,6 +1,7 @@
 #pragma once
 
 #include "codec/VideoFrame.h"
+#include "render/FloatFrame.h"
 
 namespace up::render {
 
@@ -22,6 +23,8 @@ struct LayerPlacement {
 // placement. Unrotated, unscaled layers take an exact row-copy fast path (position
 // rounded to whole pixels); everything else is inverse-mapped with bilinear sampling.
 // The canvas stays opaque.
+// The float version is what the renderer uses; the 8-bit one is kept for tools and tests.
 void compositeOver(VideoFrame& canvas, const VideoFrame& source, const LayerPlacement& placement);
+void compositeOver(FloatFrame& canvas, const FloatFrame& source, const LayerPlacement& placement);
 
 }  // namespace up::render

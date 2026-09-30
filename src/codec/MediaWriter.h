@@ -20,6 +20,11 @@ struct EncodeSettings {
     // Quality for encoders that support CRF (libx264/libx265); ignored otherwise.
     int crf = 18;
     int64_t videoBitrate = 0;  // bits/s; 0 = encoder default / CRF
+    // Colour tags written to the stream (FFmpeg names; empty = unspecified). The
+    // matrix also selects the RGB -> YUV coefficients (default BT.709). Limited range.
+    std::string colorPrimaries = "bt709";
+    std::string colorTransfer = "bt709";
+    std::string colorMatrix = "bt709";
 
     bool audio = true;
     std::string audioCodec = "aac";
